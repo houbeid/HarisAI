@@ -1,0 +1,218 @@
+════════════════════════════════════════════════════════
+  HarisAI — Architecture complète · Arbre des fichiers
+  ✅ Codé   ⏳ Prochain   ○ À faire
+════════════════════════════════════════════════════════
+
+
+📦 fraud-ml-service/          Python · FastAPI · privé
+──────────────────────────────────────────────────────
+domain/
+├── ✅ __init__.py
+├── ✅ enums.py                Currency · RiskLevel · FraudType
+├── ✅ value_objects.py        Money · TokenHash · ShapReason
+├── ✅ transaction.py          Transaction · ClientProfile
+├── ✅ fraud_score.py          FraudScore · score ensemble
+└── ✅ alert.py                Alert · workflow compliance · STR
+
+application/
+├── ports/
+│   ├── ✅ __init__.py
+│   ├── ✅ i_model.py          IFraudModel · IExplainableModel
+│   ├── ✅ i_profile_store.py  IProfileStore
+│   └── ✅ i_explainer_audit.py  IExplainer · IAuditStore
+└── use_cases/
+    ├── ✅ __init__.py
+    └── ✅ analyze_transaction.py  pipeline ML complet · 9 étapes
+
+infrastructure/
+├── ml/
+│   ├── models/
+│   │   ├── ⏳ xgboost_model.py       XGBoostModel(IExplainableModel)
+│   │   ├── ○  isolation_forest.py    IsolationForestModel(IFraudModel)
+│   │   ├── ○  tft_model.py           TFTModel(IFraudModel)
+│   │   └── ○  gnn_model.py           GNNModel(IFraudModel)
+│   ├── features/
+│   │   ├── ○  feature_engineering.py  z-score · vélocité · ratios
+│   │   ├── ○  bankily_features.py     SIM · device · agent · USSD
+│   │   └── ○  aml_features.py         structuring · layering · mules
+│   └── explainer/
+│       └── ○  shap_explainer.py       ShapExplainer(IExplainer)
+├── stores/
+│   ├── ○  redis_store.py              RedisProfileStore(IProfileStore)
+│   └── ○  postgres_store.py           PostgresAuditStore(IAuditStore)
+└── federated/
+    ├── ○  flower_client.py            FlowerClient · fit() · evaluate()
+    └── ○  model_updater.py            hot-reload sans downtime
+
+presentation/
+├── ○  routes.py                       POST /analyze · GET /health
+├── ○  schemas.py                      Pydantic TransactionIn · ScoreOut
+└── ○  dependencies.py                 DI container · injection use case
+
+training/
+├── ○  01_xgboost_training.ipynb       IEEE-CIS + PaySim
+├── ○  02_isolation_forest.ipynb
+├── ○  03_tft_training.ipynb
+├── ○  04_gnn_training.ipynb
+└── ○  05_ensemble_calibration.ipynb
+
+tests/
+├── ○  test_domain.py
+├── ○  test_use_cases.py
+└── ○  test_api.py
+
+○  main.py
+○  requirements.txt
+○  Dockerfile
+○  .env.example
+
+
+📦 fraud-backend/              .NET 8 · C# · privé
+──────────────────────────────────────────────────────
+src/FraudDetection.Domain/
+├── Entities/
+│   ├── ○  Transaction.cs
+│   ├── ○  Alert.cs
+│   └── ○  ClientProfile.cs
+├── ValueObjects/
+│   ├── ○  Money.cs             Amount + Currency MRU
+│   ├── ○  TokenHash.cs
+│   └── ○  RiskScore.cs         0-100 · immutable
+└── Events/
+    ├── ○  TransactionAnalyzed.cs
+    └── ○  FraudDetected.cs
+
+src/FraudDetection.Application/
+├── Commands/
+│   ├── AnalyzeTransaction/
+│   │   ├── ○  Command.cs
+│   │   ├── ○  Handler.cs
+│   │   └── ○  Validator.cs      FluentValidation
+│   ├── CreateAlert/
+│   │   ├── ○  Command.cs
+│   │   └── ○  Handler.cs
+│   └── ValidateAlert/
+│       ├── ○  Command.cs
+│       └── ○  Handler.cs
+├── Queries/
+│   ├── ○  GetAlerts/Query.cs · Handler.cs
+│   └── ○  GetTransactionHistory/Query.cs · Handler.cs
+└── Interfaces/
+    ├── ○  IMlScoringService.cs
+    └── ○  IAlertRepository.cs
+
+src/FraudDetection.Infrastructure/
+├── Persistence/
+│   ├── ○  AppDbContext.cs        EF Core · PostgreSQL
+│   ├── ○  AlertRepository.cs
+│   └── ○  TransactionRepository.cs
+├── ExternalServices/
+│   ├── ○  MlScoringService.cs    HTTP → FastAPI · circuit breaker
+│   └── ○  SimChangeService.cs    SIM swapping detector
+└── Caching/
+    └── ○  RedisService.cs
+
+src/FraudDetection.API/
+├── Controllers/
+│   ├── ○  TransactionController.cs   webhook Bankily
+│   ├── ○  AlertController.cs
+│   └── ○  ReportController.cs        STR BCM
+├── Hubs/
+│   └── ○  AlertHub.cs                SignalR → React temps réel
+├── Middleware/
+│   ├── ○  JwtMiddleware.cs
+│   └── ○  AuditMiddleware.cs
+└── ○  Program.cs
+
+src/FraudDetection.Tests/
+├── ○  TransactionServiceTests.cs
+└── ○  MlScoringServiceTests.cs
+
+○  migrations/
+○  Dockerfile
+○  appsettings.json
+○  appsettings.Development.json
+
+
+📦 fraud-dashboard/            React · Vite · privé
+──────────────────────────────────────────────────────
+src/
+├── app/
+│   ├── ○  App.tsx
+│   ├── ○  router.tsx
+│   └── ○  providers.tsx
+├── pages/
+│   ├── ○  Dashboard.tsx          KPIs · alertes live
+│   ├── ○  Alerts.tsx
+│   ├── ○  AlertDetail.tsx        SHAP · historique · décision
+│   └── ○  Reports.tsx            STR BCM · export PDF
+├── features/
+│   ├── alert-feed/
+│   │   ├── ○  ui/AlertCard.tsx
+│   │   ├── ○  model/alertStore.ts   Zustand
+│   │   └── ○  api/useAlerts.ts      SignalR · temps réel
+│   ├── shap-viewer/
+│   │   └── ○  ui/ShapChart.tsx      waterfall SHAP
+│   ├── report-generator/
+│   │   └── ○  ui/ReportForm.tsx     STR · PDF BCM
+│   └── transaction-history/
+│       └── ○  ui/Timeline.tsx
+├── entities/
+│   ├── ○  alert/Alert.types.ts
+│   ├── ○  alert/RiskBadge.tsx       BLOCK · REVIEW · APPROVE
+│   └── ○  alert/ScoreGauge.tsx      jauge 0-100
+└── shared/
+    ├── ui/
+    │   └── ○  Button · Card · Table · Modal
+    ├── api/
+    │   ├── ○  client.ts             axios · interceptors JWT
+    │   └── ○  signalr.ts            connexion hub alertes
+    └── i18n/
+        ├── ○  fr.json
+        └── ○  ar.json               RTL · arabe mauritanien
+
+○  package.json
+○  vite.config.ts
+○  Dockerfile
+
+
+📦 fraud-infrastructure/       Docker · K8s · privé
+──────────────────────────────────────────────────────
+docker/
+├── ○  docker-compose.yml         tous services chez l'opérateur
+└── ○  docker-compose.dev.yml     environnement dev local
+
+kubernetes/base/
+├── ○  ml-service.yaml
+├── ○  backend.yaml
+├── ○  dashboard.yaml
+├── ○  redis.yaml
+├── ○  postgres.yaml
+└── ○  ingress.yaml               accès intranet opérateur
+
+monitoring/
+├── ○  prometheus.yml
+└── ○  grafana-dashboard.json
+
+central-server/
+├── ○  flower_server.py           Federated Learning · FedAvg
+├── ○  mlflow_server.py           versioning modèles global
+└── ○  docker-compose.central.yml
+
+
+📦 fraud-demo/                 PUBLIC · démo banques
+──────────────────────────────────────────────────────
+simulator/
+├── ○  transaction_generator.py   transactions mauritaniennes
+├── ○  sim_swap_scenario.py       scénario SIM swapping
+├── ○  structuring_scenario.py    scénario smurfing BCM
+└── ○  mule_account_scenario.py   scénario comptes mules
+
+○  README.md
+○  ARCHITECTURE.md
+
+
+════════════════════════════════════════════════════════
+  Progression : 10 / 56 fichiers (18%)
+  Prochaine étape → infrastructure/ml/models/xgboost_model.py
+════════════════════════════════════════════════════════
