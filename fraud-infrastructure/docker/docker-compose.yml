@@ -1,9 +1,10 @@
 # ═══════════════════════════════════════════════════
-# HarisAI — Docker Compose
+# HarisAI — Docker Compose Principal
 # Déploiement complet chez l'opérateur mobile money
 # ═══════════════════════════════════════════════════
 #
 # DÉMARRAGE :
+#   cd fraud-infrastructure/docker
 #   docker-compose up -d
 #
 # ARRÊT :
@@ -11,13 +12,14 @@
 #
 # LOGS :
 #   docker-compose logs -f ml-service
+#   docker-compose logs -f backend
 #
 # SERVICES :
-#   ml-service  → FastAPI ML (port 8001)
-#   backend     → .NET 8    (port 5000) — à ajouter
-#   redis       → Redis     (port 6379)
-#   postgres    → PostgreSQL(port 5432)
-#   grafana     → Monitoring(port 3000)
+#   ml-service  → FastAPI ML    (port 8001)
+#   backend     → .NET 8        (port 5000)  ← décommenté quand codé
+#   redis       → Redis         (port 6379)
+#   postgres    → PostgreSQL    (port 5432)
+#   grafana     → Monitoring    (port 3000)
 
 version: "3.9"
 
@@ -26,7 +28,7 @@ services:
   # ─── Service ML FastAPI ──────────────────────────
   ml-service:
     build:
-      context: .
+      context: ../../fraud-ml-service
       dockerfile: Dockerfile
     container_name: harisai-ml
     restart: unless-stopped
@@ -34,16 +36,15 @@ services:
       - "8001:8001"
     environment:
       - API_KEY=${API_KEY:-harisai-secret-key-change-in-production}
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-harisai123}@redis:6379
       - DATABASE_URL=postgresql+asyncpg://harisai:${POSTGRES_PASSWORD:-harisai123}@postgres/harisai
       - MODEL_PATH=models/xgboost_v1.0.0.pkl
       - MODEL_VERSION=1.0.0
       - OPERATOR_NAME=${OPERATOR_NAME:-BANKILY}
     volumes:
-      # Modèle entraîné — monté depuis le host
-      # Ne jamais mettre dans l'image Docker
-      - ./models:/app/models:ro
-      - ./logs:/app/logs
+      # Modèle entraîné monté depuis le host
+      - ../../fraud-ml-service/models:/app/models:ro
+      - ml-logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -59,7 +60,45 @@ services:
       retries: 3
       start_period: 60s
 
-  # ─── Redis — Feature Store ────────────────────────
+  # ─── Backend .NET 8 ──────────────────────────────
+  # Décommenté quand fraud-backend est codé
+  # backend:
+  #   build:
+  #     context: ../../fraud-backend
+  #     dockerfile: Dockerfile
+  #   container_name: harisai-backend
+  #   restart: unless-stopped
+  #   ports:
+  #     - "5000:5000"
+  #   environment:
+  #     - ML_SERVICE_URL=http://ml-service:8001
+  #     - ML_API_KEY=${API_KEY:-harisai-secret-key}
+  #     - ConnectionStrings__DefaultConnection=Host=postgres;Database=harisai;Username=harisai;Password=${POSTGRES_PASSWORD:-harisai123}
+  #     - Redis__ConnectionString=redis:6379,password=${REDIS_PASSWORD:-harisai123}
+  #   depends_on:
+  #     ml-service:
+  #       condition: service_healthy
+  #   networks:
+  #     - harisai-network
+
+  # ─── Dashboard React ─────────────────────────────
+  # Décommenté quand fraud-dashboard est codé
+  # dashboard:
+  #   build:
+  #     context: ../../fraud-dashboard
+  #     dockerfile: Dockerfile
+  #   container_name: harisai-dashboard
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3001:80"
+  #   environment:
+  #     - VITE_API_URL=http://backend:5000
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - harisai-network
+
+  # ─── Redis — Feature Store + Cache + Queue ────────
   redis:
     image: redis:7-alpine
     container_name: harisai-redis
@@ -82,7 +121,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── PostgreSQL — Audit Trail ─────────────────────
+  # ─── PostgreSQL — Audit Trail BCM ─────────────────
   postgres:
     image: postgres:15-alpine
     container_name: harisai-postgres
@@ -115,6 +154,7 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana-data:/var/lib/grafana
+      - ../monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/harisai.json
     networks:
       - harisai-network
 
@@ -125,6 +165,8 @@ volumes:
   postgres-data:
     driver: local
   grafana-data:
+    driver: local
+  ml-logs:
     driver: local
 
 # ─── Réseau interne ───────────────────────────────

@@ -1,0 +1,56 @@
+# ═══════════════════════════════════════════════════
+# HarisAI — .dockerignore
+# Exclut les fichiers inutiles du build Docker
+# Sans ce fichier → Docker envoie 500MB+ au build context
+# ═══════════════════════════════════════════════════
+
+# ─── Données — jamais dans l'image ──────────────────
+training/data/
+*.csv
+*.parquet
+*.xlsx
+
+# ─── Modèles entraînés — montés en volume ───────────
+models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+*.onnx
+*.xgb
+
+# ─── MLflow ─────────────────────────────────────────
+mlruns/
+mlartifacts/
+
+# ─── Python ─────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# ─── Environnements ─────────────────────────────────
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# ─── Logs ───────────────────────────────────────────
+logs/
+*.log
+
+# ─── Système ────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ─── Git ────────────────────────────────────────────
+.git/
+.gitignore

@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════
+# HarisAI — Variables d'environnement
+# ═══════════════════════════════════════════════════
+# INSTRUCTIONS :
+#   1. Copie ce fichier : cp .env.example .env
+#   2. Modifie les valeurs selon ton environnement
+#   3. Ne jamais pusher .env sur GitHub (.gitignore l'exclut)
+
+# ─── API ────────────────────────────────────────────
+# Clé secrète partagée entre .NET et FastAPI
+# Change cette valeur en production !
+API_KEY=harisai-secret-key-change-in-production
+
+# ─── Serveur ────────────────────────────────────────
+HOST=0.0.0.0
+PORT=8001
+OPERATOR_NAME=BANKILY
+
+# ─── Modèles ML ─────────────────────────────────────
+MODEL_PATH=models/xgboost_v1.0.0.pkl
+ISOLATION_FOREST_PATH=models/isolation_forest_v1.0.0.pkl
+TFT_PATH=models/tft_v1.0.0.pkl
+GNN_PATH=models/gnn_v1.0.0.pkl
+MODEL_VERSION=1.0.0
+
+# ─── Redis ──────────────────────────────────────────
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=harisai123
+
+# ─── PostgreSQL ─────────────────────────────────────
+DATABASE_URL=postgresql+asyncpg://harisai:harisai123@localhost/harisai
+POSTGRES_PASSWORD=harisai123
+
+# ─── MLflow ─────────────────────────────────────────
+MLFLOW_TRACKING_URI=http://localhost:5000
+
+# ─── Grafana ────────────────────────────────────────
+GRAFANA_PASSWORD=harisai123

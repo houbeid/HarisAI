@@ -206,13 +206,14 @@ class ClientProfile:
         return (amount - self.avg_amount_7d) / self.std_amount_7d
 
     def is_dormant_account(self, days_threshold: int = 90) -> bool:
-        """
-        True si le compte est inactif depuis plus de X jours.
-        Un compte dormant réactivé soudainement = signal AML classique.
-        """
         if not self.last_transaction_at:
             return True
-        delta = datetime.utcnow() - self.last_transaction_at
+        now = datetime.utcnow()
+        last = self.last_transaction_at
+        if hasattr(last, 'tzinfo') and last.tzinfo is not None:
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+        delta = now - last
         return delta.days >= days_threshold
 
     def is_new_account(self, days_threshold: int = 30) -> bool:

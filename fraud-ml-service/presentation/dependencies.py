@@ -26,9 +26,12 @@ class Settings(BaseSettings):
     host:         str   = "0.0.0.0"
     port:         int   = 8001
 
-    # Modèle ML
-    model_path:   str   = "models/xgboost_v1.0.0.pkl"
-    model_version: str  = "1.0.0"
+    # Modèles ML
+    model_path:            str = "models/xgboost_v1.0.0.pkl"
+    isolation_forest_path: str = "models/isolation_forest_v1.0.0.pkl"
+    tft_path:              str = "models/tft_v1.0.0.pkl"
+    gnn_path:              str = "models/gnn_v1.0.0.pkl"
+    model_version:         str = "1.0.0"
 
     # Redis
     redis_url:    str   = "redis://localhost:6379"

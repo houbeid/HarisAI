@@ -32,6 +32,26 @@ from fastapi.responses import JSONResponse
 
 from presentation.dependencies import get_settings
 from presentation.routes import router
+from infrastructure.ml.explainer.shap_explainer import ShapExplainer
+from infrastructure.ml.features.feature_engineering import FeatureEngineering
+from application.use_cases import (
+    AnalyzeTransactionUseCase,
+    AnalyzeTransactionInput,
+)
+from infrastructure.stores import (
+    RedisProfileStore, InMemoryProfileStore,
+    PredictionCache, InMemoryPredictionCache,
+)
+from infrastructure.stores.transaction_queue import (
+    TransactionQueue, InMemoryTransactionQueue
+)
+from infrastructure.stores.postgres_store import PostgresAuditStore, InMemoryAuditStore
+from application.ports import IFraudModel
+from domain import ClientProfile, Transaction
+from infrastructure.ml.models.xgboost_model import XGBoostModel
+from infrastructure.ml.models.isolation_forest import IsolationForestModel
+from infrastructure.ml.models.tft_model import TFTModel
+from infrastructure.ml.models.gnn_model import GNNModel
 
 # ─────────────────────────────────────────────
 # LOGGING
@@ -51,11 +71,6 @@ logger = logging.getLogger("harisai")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Gère le cycle de vie de l'application.
-    Tout ce qui est dans le bloc 'yield' s'exécute au démarrage.
-    Tout ce qui est après le 'yield' s'exécute à l'arrêt.
-    """
     settings = get_settings()
 
     logger.info("═" * 55)
@@ -68,19 +83,23 @@ async def lifespan(app: FastAPI):
 
     # ── Étape 1 : Redis ───────────────────────
     logger.info("1/5 — Connexion Redis...")
-    from infrastructure.stores.redis_store import RedisProfileStore
     redis_store = RedisProfileStore(redis_url=settings.redis_url)
     try:
         await redis_store.connect()
-        logger.info("    ✅ Redis connecté")
+        prediction_cache  = PredictionCache(redis_client=redis_store._client)
+        transaction_queue = TransactionQueue(redis_client=redis_store._client)
+        logger.info("    ✅ Redis connecté + Cache + Queue activés")
     except Exception as e:
-        logger.warning(f"    ⚠ Redis indisponible : {e} — profils vides utilisés")
-        from infrastructure.stores.redis_store import InMemoryProfileStore
-        redis_store = InMemoryProfileStore()
+        logger.warning(f"    ⚠ Redis indisponible : {e} — mode dégradé")
+        redis_store       = InMemoryProfileStore()
+        prediction_cache  = InMemoryPredictionCache()
+        transaction_queue = InMemoryTransactionQueue()
+
+    app.state.prediction_cache  = prediction_cache
+    app.state.transaction_queue = transaction_queue
 
     # ── Étape 2 : PostgreSQL ──────────────────
     logger.info("2/5 — Connexion PostgreSQL...")
-    from infrastructure.stores.postgres_store import PostgresAuditStore, InMemoryAuditStore
     audit_store = PostgresAuditStore(database_url=settings.database_url)
     try:
         await audit_store.connect()
@@ -91,35 +110,24 @@ async def lifespan(app: FastAPI):
 
     # ── Étape 3 : Modèle XGBoost ─────────────
     logger.info("3/5 — Chargement modèle XGBoost...")
-    from infrastructure.ml.models.xgboost_model import XGBoostModel
     xgboost_model = XGBoostModel(version=settings.model_version)
     try:
         await xgboost_model.load(settings.model_path)
-        logger.info(
-            f"    ✅ XGBoost v{settings.model_version} chargé"
-        )
+        logger.info(f"    ✅ XGBoost v{settings.model_version} chargé")
     except Exception as e:
-        logger.error(f"    ❌ Modèle introuvable : {e}")
+        logger.error(f"    ❌ Modèle XGBoost introuvable : {e}")
         logger.error(f"    → Lance d'abord : python training/train_xgboost.py")
 
     app.state.xgboost_model = xgboost_model
 
     # ── Étape 4 : Modèles complémentaires ─────
-    logger.info("4/5 — Initialisation modèles complémentaires...")
+    logger.info("4/5 — Chargement modèles complémentaires...")
 
-    # Isolation Forest — mock en attendant l'implémentation
-    from application.ports import IFraudModel
-    from domain import ClientProfile, Transaction
-
+    # ── Placeholder pour les modèles non encore entraînés ──
     class PassThroughModel(IFraudModel):
-        """
-        Modèle placeholder pour IsoForest, TFT, GNN.
-        Retourne 0.0 tant que les vrais modèles ne sont pas entraînés.
-        Sera remplacé par les vraies implémentations en phase 2.
-        """
+        """Retourne 0.0 tant que le vrai modèle n'est pas entraîné."""
         def __init__(self, name: str):
             self._name = name
-
         @property
         def model_name(self): return self._name
         @property
@@ -128,16 +136,35 @@ async def lifespan(app: FastAPI):
         async def load(self, path): pass
         async def predict(self, tx, profile, features): return 0.0
 
-    isolation_model = PassThroughModel("isolation_forest")
-    tft_model       = PassThroughModel("tft_aml")
-    gnn_model       = PassThroughModel("gnn_network")
-    logger.info("    ✅ Modèles complémentaires initialisés (placeholders)")
+    # ── Isolation Forest ──────────────────────
+    isolation_model = IsolationForestModel(version=settings.model_version)
+    try:
+        await isolation_model.load(settings.isolation_forest_path)
+        logger.info("    ✅ IsolationForest chargé")
+    except Exception as e:
+        logger.warning(f"    ⚠ IsolationForest indisponible : {e} — retourne 0.0")
+        isolation_model = PassThroughModel("isolation_forest")
+
+    # ── TFT ───────────────────────────────────
+    tft_model = TFTModel(version=settings.model_version)
+    try:
+        await tft_model.load(settings.tft_path)
+        logger.info("    ✅ TFT chargé")
+    except Exception as e:
+        logger.warning(f"    ⚠ TFT indisponible : {e} — retourne 0.0")
+        tft_model = PassThroughModel("tft_aml")
+
+    # ── GNN ───────────────────────────────────
+    gnn_model = GNNModel(version=settings.model_version)
+    try:
+        await gnn_model.load(settings.gnn_path)
+        logger.info("    ✅ GNN chargé")
+    except Exception as e:
+        logger.warning(f"    ⚠ GNN indisponible : {e} — retourne 0.0")
+        gnn_model = PassThroughModel("gnn_network")
 
     # ── Étape 5 : ShapExplainer + Use Case ────
     logger.info("5/5 — Construction du pipeline...")
-    from infrastructure.ml.explainer.shap_explainer import ShapExplainer
-    from infrastructure.ml.features.feature_engineering import FeatureEngineering
-    from application.use_cases import AnalyzeTransactionUseCase
 
     explainer = ShapExplainer()
     if await xgboost_model.is_ready():
@@ -146,7 +173,6 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("    ⚠ ShapExplainer en mode fallback")
 
-    # Construction du use case avec toutes ses dépendances
     use_case = AnalyzeTransactionUseCase(
         xgboost_model=xgboost_model,
         isolation_model=isolation_model,
@@ -156,8 +182,6 @@ async def lifespan(app: FastAPI):
         explainer=explainer,
         audit_store=audit_store,
     )
-
-    # Stocke dans l'état de l'app — accessible dans routes.py
     app.state.use_case = use_case
 
     logger.info("═" * 55)
@@ -165,11 +189,36 @@ async def lifespan(app: FastAPI):
     logger.info(f"  Docs API : http://localhost:{settings.port}/docs")
     logger.info("═" * 55)
 
+    # ── Démarre le worker queue ───────────────
+    async def process_queued_transaction(data: dict) -> None:
+        from presentation.schemas import TransactionIn
+        from presentation.routes import schema_to_transaction, score_to_schema
+        try:
+            tx_in       = TransactionIn(**data)
+            transaction = schema_to_transaction(tx_in)
+            result      = await use_case.execute(
+                AnalyzeTransactionInput(transaction=transaction)
+            )
+            response = score_to_schema(result, tx_in.transaction_id)
+            await prediction_cache.set(
+                tx_in.transaction_id,
+                tx_in.operator,
+                response.model_dump(),
+            )
+        except Exception as e:
+            logger.error(f"Erreur worker transaction : {e}")
+
+    transaction_queue.start_worker(
+        process_fn=process_queued_transaction,
+        operators=[settings.operator_name],
+    )
+
     # ── L'app tourne ──────────────────────────
     yield
 
     # ── Arrêt propre ──────────────────────────
     logger.info("Arrêt du service HarisAI...")
+    await transaction_queue.stop_worker()
     if hasattr(redis_store, 'disconnect'):
         await redis_store.disconnect()
     if hasattr(audit_store, 'disconnect'):
@@ -211,10 +260,10 @@ Toutes les requêtes nécessitent le header `X-Api-Key`.
     redoc_url="/redoc",
 )
 
-# ── CORS — autorise les requêtes de .NET ──────
+# ── CORS ──────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En production : ["http://localhost:5000"]
+    allow_origins=["*"],
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )

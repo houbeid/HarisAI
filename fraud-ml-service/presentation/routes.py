@@ -254,8 +254,16 @@ async def analyze_transaction(
             detail=f"Erreur analyse : {str(e)}"
         )
 
-    # Convertit domain → schema
+    # ── Étape 5 : Convertit domain → schema ──────
     response = score_to_schema(result, data.transaction_id)
+
+    # ── Étape 6 : Stocke dans le cache Redis ──────
+    # Les prochains retries de .NET retourneront le cache
+    await cache.set(
+        data.transaction_id,
+        data.operator,
+        response.model_dump(),
+    )
 
     total_ms = (time.monotonic() - start) * 1000
     logger.info(
@@ -265,10 +273,117 @@ async def analyze_transaction(
             "score":          response.score,
             "decision":       response.decision,
             "time_ms":        round(total_ms, 1),
+            "cached":         True,
         }
     )
 
     return response
+
+
+@router.post(
+    "/analyze-async",
+    status_code=202,
+    summary="Analyser une transaction (mode asynchrone)",
+    description="""
+    Mode asynchrone — retourne immédiatement 202 Accepted.
+    Utiliser quand le serveur est sous forte charge.
+
+    **Flux :**
+    1. POST /analyze-async → 202 Accepted (< 1ms)
+    2. Transaction mise en queue Redis
+    3. Worker traite en arrière-plan
+    4. GET /result/{transaction_id} → récupère le résultat
+    """,
+)
+async def analyze_transaction_async(
+    data: TransactionIn,
+    request: Request,
+    _: str = Depends(verify_api_key),
+) -> dict:
+    """
+    Pousse la transaction dans la queue Redis et retourne immédiatement.
+    Le résultat sera disponible via GET /result/{transaction_id}.
+    """
+    queue = request.app.state.transaction_queue
+
+    msg_id = await queue.push(
+        transaction_data=data.model_dump(mode="json"),
+        operator=data.operator,
+    )
+
+    logger.info(
+        "Transaction mise en queue",
+        extra={
+            "transaction_id": data.transaction_id,
+            "operator":       data.operator,
+            "message_id":     msg_id,
+        }
+    )
+
+    return {
+        "status":          "accepted",
+        "transaction_id":  data.transaction_id,
+        "message_id":      msg_id,
+        "result_url":      f"/api/v1/result/{data.transaction_id}",
+    }
+
+
+@router.get(
+    "/result/{transaction_id}",
+    response_model=ScoreOut,
+    summary="Récupère le résultat d'une analyse async",
+    description="Récupère le score depuis le cache Redis après une analyse asynchrone.",
+)
+async def get_result(
+    transaction_id: str,
+    request: Request,
+    _: str = Depends(verify_api_key),
+) -> ScoreOut:
+    """
+    Récupère le résultat d'une analyse lancée via /analyze-async.
+    Retourne 404 si le résultat n'est pas encore disponible.
+    """
+    # Cherche dans le cache Redis
+    cache    = request.app.state.prediction_cache
+    operator = request.query_params.get("operator", "BANKILY")
+    cached   = await cache.get(transaction_id, operator)
+
+    if not cached:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Résultat non disponible pour {transaction_id} — réessayez dans quelques secondes"
+        )
+
+    return ScoreOut(**{k: v for k, v in cached.items() if k != "from_cache"})
+
+
+@router.get(
+    "/queue/stats",
+    summary="Statistiques de la queue",
+    description="Nombre de transactions en attente dans la queue Redis.",
+)
+async def queue_stats(
+    request: Request,
+    _: str = Depends(verify_api_key),
+) -> dict:
+    """Statistiques de la queue pour monitoring Grafana."""
+    queue    = request.app.state.transaction_queue
+    cache    = request.app.state.prediction_cache
+
+    operators = ["BANKILY", "SEDAD", "MASRVI"]
+    stats = {}
+    for op in operators:
+        stats[op] = {
+            "queue_size":    await queue.queue_size(op),
+        }
+
+    cache_stats = await cache.get_stats()
+
+    return {
+        "queues":        stats,
+        "cache":         cache_stats,
+        "worker_running": getattr(queue, '_running', False),
+    }
 
 
 @router.get(

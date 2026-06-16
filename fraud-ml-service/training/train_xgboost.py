@@ -215,8 +215,21 @@ def main(args):
     # ── Étape 3 : scale_pos_weight ────────────
     n_normal = (y_train == 0).sum()
     n_fraud  = (y_train == 1).sum()
-    spw = float(n_normal / n_fraud)
-    logger.info(f"scale_pos_weight = {n_normal:,}/{n_fraud} = {spw:.1f}")
+    auto_spw = float(n_normal / n_fraud)
+
+    if args.scale_pos_weight is not None:
+        # Valeur manuelle fournie via --scale-pos-weight
+        spw = args.scale_pos_weight
+        logger.info(
+            f"scale_pos_weight = {spw} (manuel) "
+            f"— auto aurait été {auto_spw:.1f}"
+        )
+    else:
+        # Calcul automatique
+        spw = auto_spw
+        logger.info(
+            f"scale_pos_weight = {n_normal:,}/{n_fraud} = {spw:.1f} (auto)"
+        )
 
     # ── Étape 4 : Entraînement ────────────────
     logger.info("Étape 4/6 — Entraînement XGBoost")
@@ -314,6 +327,13 @@ Exemples :
   python training/train_xgboost.py \\
       --datasets bankily:training/data/bankily_export.csv \\
       --version 1.1.0
+
+  # Améliorer la précision (réduire les fausses alertes)
+  python training/train_xgboost.py \\
+      --datasets creditcard:training/data/creditcard.csv \\
+                 pysim:training/data/pysim.csv \\
+      --scale-pos-weight 100 \\
+      --version 1.0.1
         """
     )
     p.add_argument(
@@ -322,10 +342,21 @@ Exemples :
         required=True,
         help="Liste de 'nom:chemin' — ex: creditcard:data/creditcard.csv"
     )
-    p.add_argument("--version",       default="1.0.0")
-    p.add_argument("--n-estimators",  type=int,   default=500)
-    p.add_argument("--max-depth",     type=int,   default=6)
-    p.add_argument("--learning-rate", type=float, default=0.05)
+    p.add_argument("--version",          default="1.0.0")
+    p.add_argument("--n-estimators",     type=int,   default=500)
+    p.add_argument("--max-depth",        type=int,   default=6)
+    p.add_argument("--learning-rate",    type=float, default=0.05)
+    p.add_argument(
+        "--scale-pos-weight",
+        type=float,
+        default=None,
+        help=(
+            "Poids classe fraude pour compenser le déséquilibre. "
+            "Si None → calculé auto (n_normal/n_fraud). "
+            "Résultat actuel creditcard+pysim = 762.6. "
+            "Essaie 50, 100 ou 200 pour améliorer la précision."
+        )
+    )
     return p.parse_args()
 
 
