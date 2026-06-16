@@ -16,6 +16,7 @@ Sans jamais savoir que c'est XGBoost derrière.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import pickle
@@ -123,6 +124,9 @@ class XGBoostModel(IExplainableModel):
         self._model_path = model_path
         self._version = version
         self._is_ready = False
+        # Lock pour protéger predict_proba contre les accès concurrents
+        # XGBoost n'est pas thread-safe par défaut
+        self._lock = asyncio.Lock()
 
         logger.info("XGBoostModel initialisé", extra={"version": version})
 
@@ -218,9 +222,10 @@ class XGBoostModel(IExplainableModel):
         # Convertit le dict en vecteur numpy dans le bon ordre
         X = self._features_to_vector(features)
 
-        # predict_proba retourne [[prob_normal, prob_fraud]]
-        # On prend la probabilité de fraude (index 1)
-        proba = self._model.predict_proba(X)[0][1]
+        # Lock — protège predict_proba contre accès concurrent
+        # XGBoost n'est pas thread-safe · une prédiction à la fois
+        async with self._lock:
+            proba = self._model.predict_proba(X)[0][1]
 
         logger.debug(
             "Prédiction XGBoost",
@@ -263,8 +268,9 @@ class XGBoostModel(IExplainableModel):
 
         X = self._features_to_vector(features)
 
-        # Calcule les valeurs SHAP — shape (1, n_features)
-        shap_values = self._explainer.shap_values(X)
+        # Lock — même protection que predict
+        async with self._lock:
+            shap_values = self._explainer.shap_values(X)
 
         # Construit la liste des explications
         explanations = []

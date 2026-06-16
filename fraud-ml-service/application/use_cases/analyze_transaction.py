@@ -23,6 +23,7 @@ Il ne connaît QUE les interfaces — c'est la Clean Architecture.
 """
 
 from __future__ import annotations
+import asyncio
 import time
 import uuid
 import logging
@@ -304,12 +305,19 @@ class AnalyzeTransactionUseCase:
         )
 
         # ── Étape 3 : Scores des 4 modèles ────────
-        # Les 4 appels sont indépendants — en production on peut
-        # les paralléliser avec asyncio.gather() pour gagner du temps
-        xgboost_score   = await self._xgboost.predict(tx, profile, features)
-        isolation_score = await self._isolation.predict(tx, profile, features)
-        tft_score       = await self._tft.predict(tx, profile, features)
-        gnn_score       = await self._gnn.predict(tx, profile, features)
+        # asyncio.gather() lance les 4 prédictions EN PARALLÈLE
+        # Gain de temps : 4 × 10ms séquentiel → ~10ms parallèle
+        (
+            xgboost_score,
+            isolation_score,
+            tft_score,
+            gnn_score,
+        ) = await asyncio.gather(
+            self._xgboost.predict(tx, profile, features),
+            self._isolation.predict(tx, profile, features),
+            self._tft.predict(tx, profile, features),
+            self._gnn.predict(tx, profile, features),
+        )
 
         # ── Étape 4 : Explication SHAP ────────────
         raw_explanations = await self._explainer.explain(
