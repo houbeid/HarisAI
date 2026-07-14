@@ -32,6 +32,7 @@ from .value_objects import (
 from .transaction import (
     Transaction,
     ClientProfile,
+    BeneficiaryProfile,
 )
 
 from .fraud_score import (
@@ -65,6 +66,7 @@ __all__ = [
     # Entities
     "Transaction",
     "ClientProfile",
+    "BeneficiaryProfile",
     "FraudScore",
     "Alert",
 

@@ -27,27 +27,27 @@ application/
 infrastructure/
 ├── ml/
 │   ├── models/
-│   │   ├── ⏳ xgboost_model.py       XGBoostModel(IExplainableModel)
-│   │   ├── ○  isolation_forest.py    IsolationForestModel(IFraudModel)
-│   │   ├── ○  tft_model.py           TFTModel(IFraudModel)
-│   │   └── ○  gnn_model.py           GNNModel(IFraudModel)
+│   │   ├── ✅ xgboost_model.py       XGBoostModel(IExplainableModel)
+│   │   ├── ✅  isolation_forest.py    IsolationForestModel(IFraudModel)
+│   │   ├── ✅  tft_model.py           TFTModel(IFraudModel)
+│   │   └── ✅  gnn_model.py           GNNModel(IFraudModel)
 │   ├── features/
-│   │   ├── ○  feature_engineering.py  z-score · vélocité · ratios
+│   │   ├── ✅  feature_engineering.py  z-score · vélocité · ratios
 │   │   ├── ○  bankily_features.py     SIM · device · agent · USSD
 │   │   └── ○  aml_features.py         structuring · layering · mules
 │   └── explainer/
-│       └── ○  shap_explainer.py       ShapExplainer(IExplainer)
+│       └── ✅  shap_explainer.py       ShapExplainer(IExplainer)
 ├── stores/
-│   ├── ○  redis_store.py              RedisProfileStore(IProfileStore)
-│   └── ○  postgres_store.py           PostgresAuditStore(IAuditStore)
+│   ├── ✅  redis_store.py              RedisProfileStore(IProfileStore)
+│   └── ✅  postgres_store.py           PostgresAuditStore(IAuditStore)
 └── federated/
-    ├── ○  flower_client.py            FlowerClient · fit() · evaluate()
-    └── ○  model_updater.py            hot-reload sans downtime
+    ├── ✅  flower_client.py            FlowerClient · fit() · evaluate()
+    └── ✅  model_updater.py            hot-reload sans downtime
 
 presentation/
-├── ○  routes.py                       POST /analyze · GET /health
-├── ○  schemas.py                      Pydantic TransactionIn · ScoreOut
-└── ○  dependencies.py                 DI container · injection use case
+├── ✅  routes.py                       POST /analyze · GET /health
+├── ✅  schemas.py                      Pydantic TransactionIn · ScoreOut
+└── ✅  dependencies.py                 DI container · injection use case
 
 training/
 ├── ○  01_xgboost_training.ipynb       IEEE-CIS + PaySim
@@ -57,81 +57,104 @@ training/
 └── ○  05_ensemble_calibration.ipynb
 
 tests/
-├── ○  test_domain.py
-├── ○  test_use_cases.py
-└── ○  test_api.py
+├── ✅  test_domain.py
+├── ✅  test_use_cases.py
+└── ✅  test_api.py
 
-○  main.py
-○  requirements.txt
-○  Dockerfile
-○  .env.example
+✅  main.py
+✅  requirements.txt
+✅  Dockerfile
+✅  .env.example
 
 
-📦 fraud-backend/              .NET 8 · C# · privé
-──────────────────────────────────────────────────────
+📦 fraud-backend/                                  .NET 8 · C# · privé
+═══════════════════════════════════════════════════════════════════
+
 src/FraudDetection.Domain/
 ├── Entities/
-│   ├── ○  Transaction.cs
-│   ├── ○  Alert.cs
-│   └── ○  ClientProfile.cs
+│   ├── ○ Transaction.cs
+│   ├── ○ Alert.cs
+│   └── ○ ClientProfile.cs
 ├── ValueObjects/
-│   ├── ○  Money.cs             Amount + Currency MRU
-│   ├── ○  TokenHash.cs
-│   └── ○  RiskScore.cs         0-100 · immutable
-└── Events/
-    ├── ○  TransactionAnalyzed.cs
-    └── ○  FraudDetected.cs
+│   ├── ○ Money.cs                Amount + Currency MRU
+│   ├── ○ TokenHash.cs
+│   └── ○ RiskScore.cs            0-100 · immutable · reflète ScoreOut, ne recalcule jamais la décision
+├── Events/
+│   ├── ○ TransactionAnalyzed.cs
+│   └── ○ FraudDetected.cs
+└── Enums/
+    └── ○ DecisionStatus.cs        APPROVE/REVIEW/BLOCK — miroir du contrat Python
 
 src/FraudDetection.Application/
 ├── Commands/
 │   ├── AnalyzeTransaction/
-│   │   ├── ○  Command.cs
-│   │   ├── ○  Handler.cs
-│   │   └── ○  Validator.cs      FluentValidation
+│   │   └── ○ Command.cs · Handler.cs · Validator.cs (FluentValidation)
 │   ├── CreateAlert/
-│   │   ├── ○  Command.cs
-│   │   └── ○  Handler.cs
-│   └── ValidateAlert/
-│       ├── ○  Command.cs
-│       └── ○  Handler.cs
+│   │   └── ○ Command.cs · Handler.cs
+│   ├── ValidateAlert/
+│   │   └── ○ Command.cs · Handler.cs
+│   └── GenerateStrReport/
+│       └── ○ Command.cs · Handler.cs   lit les ScoreOut REVIEW/BLOCK déjà persistés en local
 ├── Queries/
-│   ├── ○  GetAlerts/Query.cs · Handler.cs
-│   └── ○  GetTransactionHistory/Query.cs · Handler.cs
+│   ├── ○ GetAlerts/Query.cs · Handler.cs
+│   └── ○ GetTransactionHistory/Query.cs · Handler.cs
 └── Interfaces/
-    ├── ○  IMlScoringService.cs
-    └── ○  IAlertRepository.cs
+    ├── ○ IMlScoringService.cs
+    ├── ○ IAlertRepository.cs
+    ├── ○ ITransactionRepository.cs
+    ├── ○ IOperatorWebhookAdapter.cs
+    └── ○ IPendingTransactionQueue.cs
 
 src/FraudDetection.Infrastructure/
 ├── Persistence/
-│   ├── ○  AppDbContext.cs        EF Core · PostgreSQL
-│   ├── ○  AlertRepository.cs
-│   └── ○  TransactionRepository.cs
+│   ├── ○ AppDbContext.cs           EF Core · schéma fraud_backend (Postgres partagé avec ML, schémas séparés)
+│   ├── ○ AlertRepository.cs
+│   ├── ○ TransactionRepository.cs
+│   └── ○ PendingTransactionRepository.cs   SELECT ... FOR UPDATE SKIP LOCKED
 ├── ExternalServices/
-│   ├── ○  MlScoringService.cs    HTTP → FastAPI · circuit breaker
-│   └── ○  SimChangeService.cs    SIM swapping detector
-└── Caching/
-    └── ○  RedisService.cs
+│   ├── ○ MlScoringService.cs       HTTP typé → FastAPI · Polly retry + circuit breaker · REVIEW par défaut si down
+│   └── ○ SimChangeService.cs       calcule sim_changed_72h avant l'appel ML (enrichissement)
+├── Adapters/
+│   ├── ○ BankilyWebhookAdapter.cs  CanHandle("BANKILY")
+│   ├── ○ SedadWebhookAdapter.cs    CanHandle("SEDAD")
+│   ├── ○ MasrviWebhookAdapter.cs   CanHandle("MASRVI")
+│   └── ○ OperatorAdapterRegistry.cs   un seul actif par site, via config (Kustomize overlay)
+├── Auth/
+│   ├── ○ HmacAuthenticationHandler.cs   signature des webhooks opérateurs
+│   └── ○ JwtAuthenticationHandler.cs    sessions humaines (dashboard)
+├── Caching/
+│   └── ○ RedisService.cs           préfixe fraud-backend:* (Redis partagé avec ML) + backplane SignalR
+└── Observability/
+    ├── ○ MetricsCollector.cs        /metrics Prometheus .NET
+    └── ○ CorrelationIdMiddleware.cs  header propagé vers FastAPI + logs Serilog
 
 src/FraudDetection.API/
 ├── Controllers/
-│   ├── ○  TransactionController.cs   webhook Bankily
-│   ├── ○  AlertController.cs
-│   └── ○  ReportController.cs        STR BCM
+│   ├── ○ TransactionController.cs   [Authorize(Schemes="Hmac")] — webhook générique, adapté via registre
+│   ├── ○ AlertController.cs         [Authorize(Schemes="Jwt")]
+│   ├── ○ ReportController.cs        [Authorize(Roles="compliance_officer,supervisor")] — STR BCM
+│   └── ○ HealthController.cs        /health/live vs /health/ready
 ├── Hubs/
-│   └── ○  AlertHub.cs                SignalR → React temps réel
+│   └── ○ AlertHub.cs                SignalR → React, via ingress avec support websocket
 ├── Middleware/
-│   ├── ○  JwtMiddleware.cs
-│   └── ○  AuditMiddleware.cs
-└── ○  Program.cs
+│   └── ○ AuditMiddleware.cs
+└── ○ Program.cs                      DI : adapters, Polly, Serilog, OpenTelemetry, health checks
+
+src/FraudDetection.Worker/            replicas: 1 — à confirmer définitivement
+└── ○ PendingTransactionWorker.cs    BackgroundService, relance vers FastAPI dès /health OK
 
 src/FraudDetection.Tests/
-├── ○  TransactionServiceTests.cs
-└── ○  MlScoringServiceTests.cs
+├── ○ Domain/RiskScoreTests.cs
+├── Application/
+│   ├── ○ AnalyzeTransactionHandlerTests.cs
+│   └── ○ OperatorAdapterRegistryTests.cs
+├── ○ Contract/FastApiContractTests.cs   stub WireMock, détecte toute dérive du contrat figé
+└── ○ GoldenSamples/BankilyWebhookSamples/   payloads réels figés dès obtention
 
-○  migrations/
-○  Dockerfile
-○  appsettings.json
-○  appsettings.Development.json
+○ migrations/
+○ Dockerfile
+○ appsettings.json
+○ appsettings.Development.json
 
 
 📦 fraud-dashboard/            React · Vite · privé
@@ -178,27 +201,34 @@ src/
 
 📦 fraud-infrastructure/       Docker · K8s · privé
 ──────────────────────────────────────────────────────
+
 docker/
-├── ○  docker-compose.yml         tous services chez l'opérateur
-└── ○  docker-compose.dev.yml     environnement dev local
+├── ○ docker-compose.yml         tous services chez l'opérateur (ml-service + backend + redis + postgres)
+└── ○ docker-compose.dev.yml     environnement dev local
 
 kubernetes/base/
-├── ○  ml-service.yaml
-├── ○  backend.yaml
-├── ○  dashboard.yaml
-├── ○  redis.yaml
-├── ○  postgres.yaml
-└── ○  ingress.yaml               accès intranet opérateur
+├── ○ ml-service.yaml
+├── ○ backend.yaml               Deployment + Service + HPA (.NET API)
+├── ○ backend-worker.yaml        Deployment .NET Worker, replicas: 1
+├── ○ migration-job.yaml         Job EF Core, exécuté une fois avant backend.yaml
+├── ○ dashboard.yaml
+├── ○ redis.yaml                 PARTAGÉ ml-service + backend, préfixes de clé séparés
+├── ○ postgres.yaml              PARTAGÉ, schémas séparés (ml_audit / fraud_backend)
+└── ○ ingress.yaml                accès intranet opérateur + support websocket pour /alertHub
+
+kubernetes/overlays/             Kustomize — un dossier par site, ne patch QUE la config
+├── ○ bankily/kustomization.yaml   operator code, image tag, secrets HMAC, replicas
+├── ○ sedad/kustomization.yaml
+└── ○ masrvi/kustomization.yaml
 
 monitoring/
-├── ○  prometheus.yml
-└── ○  grafana-dashboard.json
+├── ○ prometheus.yml              scrape ml-service + backend (/metrics .NET inclus)
+└── ○ grafana-dashboard.json
 
 central-server/
-├── ○  flower_server.py           Federated Learning · FedAvg
-├── ○  mlflow_server.py           versioning modèles global
-└── ○  docker-compose.central.yml
-
+├── ○ flower_server.py            Federated Learning · FedAvg
+├── ○ mlflow_server.py            versioning modèles global
+└── ○ docker-compose.central.yml
 
 📦 fraud-demo/                 PUBLIC · démo banques
 ──────────────────────────────────────────────────────
@@ -213,6 +243,6 @@ simulator/
 
 
 ════════════════════════════════════════════════════════
-  Progression : 10 / 56 fichiers (18%)
+  Progression : 12 / 56 fichiers (18%)
   Prochaine étape → infrastructure/ml/models/xgboost_model.py
 ════════════════════════════════════════════════════════

@@ -1,0 +1,18 @@
+# ═══════════════════════════════════════════════════
+# HarisAI — Auto-chargement du dashboard
+# ═══════════════════════════════════════════════════
+# Dit à Grafana de scanner ce dossier et charger
+# automatiquement tous les .json qu'il contient comme dashboards.
+
+apiVersion: 1
+
+providers:
+  - name: "HarisAI"
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

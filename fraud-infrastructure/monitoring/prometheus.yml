@@ -1,0 +1,25 @@
+# ═══════════════════════════════════════════════════
+# HarisAI — Configuration Prometheus
+# ═══════════════════════════════════════════════════
+# Scrape les métriques exposées par fraud-ml-service
+# sur GET /api/v1/metrics toutes les 15 secondes.
+
+global:
+  scrape_interval:     15s   # fréquence de collecte
+  evaluation_interval: 15s   # fréquence d'évaluation des règles d'alerte
+
+scrape_configs:
+
+  # ── Service ML FastAPI ──────────────────────────
+  - job_name: "harisai-ml-service"
+    metrics_path: "/api/v1/metrics"
+    static_configs:
+      - targets: ["ml-service:8001"]
+        labels:
+          service: "fraud-ml-service"
+          env: "production"
+
+  # ── Prometheus se monitore lui-même ─────────────
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

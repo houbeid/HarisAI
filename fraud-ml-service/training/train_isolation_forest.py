@@ -162,7 +162,7 @@ def parse_args():
     p.add_argument(
         "--contamination",
         type=float,
-        default=0.01,
+        default=0.002,
         help="Proportion d'anomalies attendue (défaut: 0.01 = 1%%)"
     )
     return p.parse_args()

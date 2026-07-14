@@ -34,18 +34,62 @@ class FraudType(str, Enum):
     """
     Type de fraude détectée.
     Utilisé dans les rapports STR envoyés à la BCM.
+
+    STATUT DE DÉTECTION (revu suite à l'étude GSMA "Mobile Money Fraud
+    Typologies and Mitigation Strategies", mars 2024) :
+
+        ACCOUNT_TAKEOVER, REVERSAL_FRAUD, KYC_BREACH : ajoutées mais
+        SANS détection active pour l'instant — voir commentaire par
+        valeur. Ajoutées maintenant plutôt que plus tard car ce sont
+        des catégories STR légitimes que la BCM peut demander de
+        justifier, et étendre un enum utilisé dans un contrat figé
+        (ScoreOut.fraud_type) coûte plus cher une fois .NET commencé.
+
+        EXCLUES DÉLIBÉRÉMENT (pas juste "pas encore faites") :
+        - COMMISSION_FRAUD / arbitrage agent (split transactions,
+          topping-up) : nécessite une feature qui n'existe pas encore
+          (comportement agent sur plusieurs transactions/tills) —
+          à ajouter seulement quand cette feature sera conçue, pour
+          éviter de répéter l'erreur trouvée sur is_mule_pattern
+          (une valeur calculée mais jamais consommée par un modèle).
+        - CICO_FRAUD (short-changing cash au guichet) : la différence
+          entre cash physique remis et e-money crédité n'est PAS une
+          donnée que HarisAI reçoit via le webhook transaction — c'est
+          une réconciliation qui se passe hors du système. Hors scope
+          structurel, pas juste une priorité basse.
+
+        Ces deux exclusions sont réversibles si une future revue du
+        contrat webhook ou des données réelles Bankily change la donne.
     """
     # Fraudes mobile money spécifiques Mauritanie
-    SIM_SWAPPING     = "SIM_SWAPPING"      # Clonage SIM
+    SIM_SWAPPING     = "SIM_SWAPPING"      # Clonage SIM — détection active
     OTP_THEFT        = "OTP_THEFT"         # Vol code OTP
-    USSD_SCAM        = "USSD_SCAM"         # Arnaque *888#
-    FAKE_MERCHANT    = "FAKE_MERCHANT"     # Faux compte marchand
-    FRAUDULENT_AGENT = "FRAUDULENT_AGENT"  # Agent Bankily frauduleux
+    USSD_SCAM        = "USSD_SCAM"         # Arnaque *888# — détection active
+    FAKE_MERCHANT    = "FAKE_MERCHANT"     # Faux compte marchand — détection active
+    FRAUDULENT_AGENT = "FRAUDULENT_AGENT"  # Agent Bankily frauduleux — détection active
+    ACCOUNT_TAKEOVER = "ACCOUNT_TAKEOVER"  # Prise de contrôle SANS SIM swap
+                                            # (is_new_device + is_new_zone + z-score
+                                            # élevé, sans sim_changed_72h) — PAS ENCORE
+                                            # branché dans _detect_fraud_type()
 
     # Fraudes AML
     STRUCTURING      = "STRUCTURING"       # Smurfing sous seuil BCM
     LAYERING         = "LAYERING"          # Circulation entre comptes
-    MULE_ACCOUNT     = "MULE_ACCOUNT"      # Compte mule blanchiment
+    MULE_ACCOUNT     = "MULE_ACCOUNT"      # Compte mule blanchiment — actuellement
+                                            # détecté par heuristique brute dans
+                                            # _detect_fraud_type(), PAS ENCORE relié
+                                            # à BeneficiaryProfile.is_likely_mule()
+                                            # (voir écarts documentés séparément)
+
+    # Fraudes identifiées via l'étude GSMA — sans détection active
+    REVERSAL_FRAUD   = "REVERSAL_FRAUD"    # Reversal/chargeback abusif après
+                                            # transaction légitime — NÉCESSITE un
+                                            # champ absent de TransactionIn (type
+                                            # d'événement) pour être détectable
+    KYC_BREACH       = "KYC_BREACH"        # Dépôt direct / retrait à distance sans
+                                            # présence physique vérifiée — NÉCESSITE
+                                            # un champ absent de TransactionIn pour
+                                            # être détectable
 
     # Fraudes générales
     UNUSUAL_BEHAVIOR = "UNUSUAL_BEHAVIOR"  # Comportement anormal

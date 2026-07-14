@@ -1,22 +1,37 @@
 """
 HarisAI — Feature Engineering
 ================================
-Transforme une Transaction brute + ClientProfile Redis
-en un dictionnaire de 22 features numériques pour XGBoost.
+Transforme une Transaction brute + ClientProfile Redis (+ BeneficiaryProfile
+Redis optionnel) en un dictionnaire de features numériques pour les 4 modèles ML.
+
+DEUX TYPES DE FEATURES :
+    22 features XGBoost  → FEATURE_NAMES → pour XGBoost + IsoForest
+     7 features AML      → AML_FEATURE_NAMES → pour TFT + GNN
 
 RÈGLE STRICTE :
-    Les noms produits ici doivent correspondre exactement
+    Les 22 features XGBoost doivent correspondre exactement
     à FEATURE_NAMES dans infrastructure/ml/models/xgboost_model.py
+
+    Les 7 AML features sont supplémentaires — utilisées par TFT et GNN
+    pour détecter les patterns multi-transactions (structuring, layering,
+    comptes mules). is_mule_pattern est la seule des 7 à dépendre d'un
+    second profil Redis — celui du BÉNÉFICIAIRE, pas du client — car
+    détecter une mule nécessite de savoir ce que ce compte fait de
+    l'argent qu'il REÇOIT, une information que ClientProfile seul
+    (point de vue expéditeur) ne peut pas fournir.
 
 FLUX :
     Transaction (webhook Bankily)
-    + ClientProfile (Redis)
+    + ClientProfile (Redis, côté expéditeur)
+    + BeneficiaryProfile (Redis, côté destinataire — optionnel)
          ↓
     FeatureEngineering.compute()
          ↓
-    Dict 22 features numériques
+    Dict 22+7 = 29 features numériques
          ↓
-    XGBoostModel.predict()
+    XGBoost → 22 features
+    TFT     → 10 features temporelles + 7 AML
+    GNN     → 8 features réseau + 7 AML
 """
 
 from __future__ import annotations
@@ -27,7 +42,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from domain import ClientProfile, Transaction
+from domain import ClientProfile, BeneficiaryProfile, Transaction
 from infrastructure.ml.models.xgboost_model import FEATURE_NAMES
 
 logger = logging.getLogger(__name__)
@@ -50,6 +65,31 @@ NEW_ACCOUNT_DAYS = 30
 # Compte considéré comme dormant si inactif depuis N jours
 DORMANT_ACCOUNT_DAYS = 90
 
+# ─────────────────────────────────────────────
+# AML FEATURES — patterns multi-transactions
+# Utilisées par TFT et GNN uniquement
+# ─────────────────────────────────────────────
+
+AML_FEATURE_NAMES = [
+    "tx_velocity_ratio",      # vitesse transactions vs habitude
+    "amount_cumul_ratio",     # cumul 24h / moyenne mensuelle
+    "near_threshold_flag",    # montant entre 8000-9999 MRU (structuring)
+    "rapid_transfer_flag",    # retransfert rapide après réception
+    "round_amount_flag",      # montants ronds suspects
+    "many_beneficiaries_flag",# trop de bénéficiaires différents
+    "is_mule_pattern",        # fan-in élevé + non-marchand + sortie rapide
+]
+
+# Zone de structuring — juste sous le seuil BCM
+STRUCTURING_LOWER = BCM_DECLARATION_THRESHOLD * 0.90   # 9 000 MRU
+STRUCTURING_UPPER = BCM_DECLARATION_THRESHOLD * 0.999  # 9 990 MRU
+
+# Montants ronds suspects (en MRU)
+ROUND_AMOUNTS = {
+    5_000, 10_000, 15_000, 20_000,
+    25_000, 50_000, 100_000, 200_000,
+}
+
 
 # ─────────────────────────────────────────────
 # RÉSULTAT DU FEATURE ENGINEERING
@@ -58,8 +98,8 @@ DORMANT_ACCOUNT_DAYS = 90
 @dataclass
 class FeatureSet:
     """
-    Conteneur des 22 features calculées.
-    Facilite le débogage et les logs.
+    Conteneur des features calculées.
+    22 features XGBoost + 6 features AML = 28 total.
     """
     features: Dict[str, float]
 
@@ -69,12 +109,20 @@ class FeatureSet:
     def get(self, name: str, default: float = 0.0) -> float:
         return self.features.get(name, default)
 
+    def xgboost_features(self) -> Dict[str, float]:
+        """Retourne uniquement les 22 features pour XGBoost."""
+        return {k: v for k, v in self.features.items() if k in FEATURE_NAMES}
+
+    def aml_features(self) -> Dict[str, float]:
+        """Retourne uniquement les 6 features AML pour TFT/GNN."""
+        return {k: v for k, v in self.features.items() if k in AML_FEATURE_NAMES}
+
     def missing_features(self) -> list:
         """Retourne les features manquantes par rapport à FEATURE_NAMES."""
         return [f for f in FEATURE_NAMES if f not in self.features]
 
     def is_complete(self) -> bool:
-        """True si toutes les 22 features sont présentes."""
+        """True si toutes les 22 features XGBoost sont présentes."""
         return len(self.missing_features()) == 0
 
     def __repr__(self) -> str:
@@ -92,18 +140,20 @@ class FeatureSet:
 
 class FeatureEngineering:
     """
-    Calcule toutes les features nécessaires pour XGBoost.
+    Calcule toutes les features pour les 4 modèles ML.
 
-    Trois catégories de features :
+    Quatre catégories de features :
         1. Transaction    → directement depuis le webhook Bankily
         2. Comportement   → comparaison avec le profil Redis du client
         3. Ratios         → calculs dérivés
+        4. AML            → patterns multi-transactions (TFT + GNN)
 
     Exemple :
         fe = FeatureEngineering()
         feature_set = fe.compute(transaction, profile)
-        features = feature_set.to_dict()
-        score = await xgboost_model.predict(tx, profile, features)
+        features = feature_set.to_dict()          # toutes les features
+        xgb_feat = feature_set.xgboost_features() # 22 features XGBoost
+        aml_feat = feature_set.aml_features()     # 6 features AML
     """
 
     def compute(
@@ -111,34 +161,47 @@ class FeatureEngineering:
         transaction: Transaction,
         profile: ClientProfile,
         extra_features: Optional[Dict] = None,
+        beneficiary_profile: Optional[BeneficiaryProfile] = None,
     ) -> FeatureSet:
         """
-        Calcule les 22 features à partir de la transaction et du profil.
+        Calcule les 22+6+1 features à partir de la transaction et du profil.
 
         Args:
-            transaction    : transaction reçue de Bankily via webhook
-            profile        : profil comportemental du client depuis Redis
-            extra_features : features additionnelles pré-calculées par .NET
-                             (optionnel — mergées en dernier)
+            transaction          : transaction reçue de Bankily via webhook
+            profile               : profil comportemental du client (expéditeur) depuis Redis
+            extra_features        : features additionnelles pré-calculées par .NET
+            beneficiary_profile   : profil comportemental du bénéficiaire (destinataire)
+                                     depuis Redis — optionnel. Si absent, is_mule_pattern
+                                     vaut 0.0 par défaut plutôt que de lever une erreur,
+                                     pour ne pas casser les appels existants qui ne
+                                     passent pas encore ce nouveau paramètre.
 
         Returns:
-            FeatureSet contenant les 22 features numériques
+            FeatureSet contenant 22 features XGBoost + 7 features AML
         """
         features: Dict[str, float] = {}
 
-        # Catégorie 1 — Features transaction
-        features.update(
-            self._transaction_features(transaction)
-        )
+        # Catégorie 1 — Features transaction (22 XGBoost)
+        features.update(self._transaction_features(transaction))
 
-        # Catégorie 2 — Features comportementales
-        features.update(
-            self._behavioral_features(transaction, profile)
-        )
+        # Catégorie 2 — Features comportementales (22 XGBoost)
+        features.update(self._behavioral_features(transaction, profile))
 
-        # Catégorie 3 — Features ratios
-        features.update(
-            self._ratio_features(transaction, profile)
+        # Catégorie 3 — Features ratios (22 XGBoost)
+        features.update(self._ratio_features(transaction, profile))
+
+        # Catégorie 4 — AML features (TFT + GNN uniquement)
+        features.update(self._aml_features(transaction, profile))
+
+        # Catégorie 5 — Compte mule (TFT + GNN uniquement)
+        # Séparée de _aml_features() car elle dépend d'un profil différent
+        # (bénéficiaire, pas client) — voir BeneficiaryProfile.is_likely_mule()
+        features["is_mule_pattern"] = float(
+            beneficiary_profile.is_likely_mule(
+                is_merchant=transaction.beneficiary_is_merchant
+            )
+            if beneficiary_profile is not None
+            else False
         )
 
         # Merge features additionnelles de .NET si présentes
@@ -147,7 +210,7 @@ class FeatureEngineering:
 
         feature_set = FeatureSet(features=features)
 
-        # Vérification complétude
+        # Vérification complétude des 22 features XGBoost
         missing = feature_set.missing_features()
         if missing:
             logger.warning(
@@ -157,22 +220,18 @@ class FeatureEngineering:
                     "missing": missing,
                 }
             )
-            # Remplace les features manquantes par 0
             for name in missing:
                 features[name] = 0.0
 
         logger.debug(
             "Features calculées",
             extra={
-                "transaction_id": transaction.transaction_id,
-                "amount_z_score": round(
-                    features.get("amount_z_score", 0), 2
-                ),
-                "is_new_device": features.get("is_new_device", 0),
+                "transaction_id":  transaction.transaction_id,
+                "amount_z_score":  round(features.get("amount_z_score", 0), 2),
+                "is_new_device":   features.get("is_new_device", 0),
                 "sim_changed_72h": features.get("sim_changed_72h", 0),
-                "ratio_to_avg": round(
-                    features.get("ratio_to_avg", 0), 2
-                ),
+                "near_threshold":  features.get("near_threshold_flag", 0),
+                "tx_velocity":     round(features.get("tx_velocity_ratio", 0), 2),
             }
         )
 
@@ -335,6 +394,73 @@ class FeatureEngineering:
         else:
             # Nouveau client sans historique → ratio = 1 par défaut
             features["ratio_to_avg"] = 1.0
+
+        return features
+
+
+    # ─────────────────────────────────────────
+    # CATÉGORIE 4 — AML Features
+    # Patterns multi-transactions pour TFT et GNN
+    # Détectent structuring, layering, velocity
+    # ─────────────────────────────────────────
+
+    def _aml_features(
+        self,
+        tx: Transaction,
+        profile: ClientProfile,
+    ) -> Dict[str, float]:
+        """
+        Features AML — patterns sur plusieurs transactions.
+        Utilisées par TFT et GNN uniquement.
+        XGBoost n'utilise PAS ces features.
+        """
+        features = {}
+        amount = tx.amount.amount
+
+        # 1. Vélocité — rythme transactions vs habitude
+        avg_tx_per_day = max(
+            profile.total_transactions / max(profile.account_age_days, 1),
+            0.1
+        )
+        recent_tx_estimate = min(profile.total_transactions, 10)
+        features["tx_velocity_ratio"] = float(
+            recent_tx_estimate / (avg_tx_per_day * 30 + 1)
+        )
+
+        # 2. Cumul 24h — structuring sur la journée
+        monthly_avg = max(profile.avg_amount_30d, 1.0)
+        estimated_daily_cumul = amount * max(recent_tx_estimate / 30, 1)
+        features["amount_cumul_ratio"] = float(
+            estimated_daily_cumul / (monthly_avg * 3 + 1)
+        )
+
+        # 3. Structuring — juste sous le seuil BCM 10 000 MRU
+        features["near_threshold_flag"] = float(
+            STRUCTURING_LOWER <= amount <= STRUCTURING_UPPER
+        )
+
+        # 4. Retransfert rapide — compte mule
+        is_new_benef = bool(
+            tx.beneficiary_token and
+            profile.is_new_beneficiary(tx.beneficiary_token)
+        )
+        features["rapid_transfer_flag"] = float(
+            is_new_benef and
+            tx.is_night_transaction and
+            amount > profile.avg_amount_30d * 2
+        )
+
+        # 5. Montants ronds suspects
+        features["round_amount_flag"] = float(
+            amount in ROUND_AMOUNTS or
+            (amount >= 1000 and amount % 1000 == 0)
+        )
+
+        # 6. Trop de bénéficiaires différents
+        known_beneficiaries = len(profile.known_beneficiary_tokens)
+        features["many_beneficiaries_flag"] = float(
+            known_beneficiaries > 20 and is_new_benef
+        )
 
         return features
 

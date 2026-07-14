@@ -142,7 +142,25 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── Grafana — Monitoring ─────────────────────────
+  # ─── Prometheus — Collecte des métriques ──────────
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: harisai-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+    networks:
+      - harisai-network
+    depends_on:
+      - ml-service
+
+  # ─── Grafana — Dashboards de monitoring ────────────
   grafana:
     image: grafana/grafana:10.0.0
     container_name: harisai-grafana
@@ -152,11 +170,15 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-harisai123}
       - GF_USERS_ALLOW_SIGN_UP=false
+      # Provisioning auto — pas besoin de configurer manuellement
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
     volumes:
       - grafana-data:/var/lib/grafana
-      - ../monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/harisai.json
+      - ../monitoring/provisioning:/etc/grafana/provisioning:ro
     networks:
       - harisai-network
+    depends_on:
+      - prometheus
 
 # ─── Volumes persistants ──────────────────────────
 volumes:
@@ -165,6 +187,8 @@ volumes:
   postgres-data:
     driver: local
   grafana-data:
+    driver: local
+  prometheus-data:
     driver: local
   ml-logs:
     driver: local

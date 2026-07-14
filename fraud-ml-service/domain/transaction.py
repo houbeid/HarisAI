@@ -206,8 +206,13 @@ class ClientProfile:
         return (amount - self.avg_amount_7d) / self.std_amount_7d
 
     def is_dormant_account(self, days_threshold: int = 90) -> bool:
+        """
+        True si le compte est inactif depuis plus de X jours.
+        Un compte dormant réactivé soudainement = signal AML classique.
+        """
         if not self.last_transaction_at:
             return True
+        # Gère les deux cas : datetime avec et sans timezone
         now = datetime.utcnow()
         last = self.last_transaction_at
         if hasattr(last, 'tzinfo') and last.tzinfo is not None:
@@ -230,5 +235,143 @@ class ClientProfile:
             f"operator={self.operator}, "
             f"avg_30d={self.avg_amount_30d:.0f} MRU, "
             f"tx_count={self.total_transactions}"
+            f")"
+        )
+
+
+@dataclass
+class BeneficiaryProfile:
+    """
+    Profil comportemental d'un BÉNÉFICIAIRE — stocké dans Redis avec TTL 90 jours.
+
+    Symétrique à ClientProfile, mais du point de vue inverse : ClientProfile
+    répond à "à qui ce client envoie-t-il habituellement de l'argent ?",
+    BeneficiaryProfile répond à "qui envoie habituellement de l'argent à
+    ce compte, et que devient cet argent une fois reçu ?".
+
+    Cette distinction est nécessaire pour détecter les comptes mules sans
+    confondre avec un marchand légitime. Un supermarché, une boutique ou un
+    restaurant affilié à Bankily reçoit lui aussi de très nombreux clients
+    différents chaque jour — ce qui est entièrement normal pour son activité.
+    Ce qui distingue une mule n'est pas le nombre d'expéditeurs différents
+    seul, mais la combinaison de ce nombre avec l'absence de statut marchand
+    ET la vitesse à laquelle l'argent reçu est reversé ou retiré.
+
+    Mis à jour après chaque transaction reçue et confirmée comme légitime.
+    """
+
+    beneficiary_token: TokenHash
+    operator: str  # BANKILY, SEDAD, MASRVI
+
+    # ── Expéditeurs ────────────────────────────
+    known_sender_tokens: list = field(default_factory=list)
+    distinct_senders_30d: int = 0
+    # Nombre d'expéditeurs DIFFÉRENTS dans les 30 derniers jours.
+    # Glissant — remis à jour à chaque transaction reçue, pas juste
+    # accumulé indéfiniment, pour ne pas pénaliser un vieux marchand
+    # actif depuis des années avec un total historique énorme.
+
+    # ── Statistiques montants reçus ───────────
+    avg_amount_received_30d: float = 0.0
+    total_received_30d: float = 0.0
+
+    # ── Vélocité de sortie — coeur du signal mule ─
+    last_received_at: Optional[datetime] = None
+    last_outflow_at: Optional[datetime] = None
+    # last_outflow_at : dernière fois que CE compte a lui-même envoyé
+    # de l'argent (devient expéditeur dans une autre transaction).
+    # Un grand écart entre last_received_at et last_outflow_at suivant
+    # immédiatement = argent qui transite vite, signal mule classique.
+
+    # ── Méta compte ─────────────────────────────
+    total_transactions_received: int = 0
+    account_age_days: int = 0
+    last_updated: datetime = field(default_factory=datetime.utcnow)
+
+    # ── Méthodes de détection ───────────────────
+
+    def is_new_sender(self, token: TokenHash) -> bool:
+        """True si ce compte n'a jamais reçu d'argent de cet expéditeur."""
+        return token.value not in self.known_sender_tokens
+
+    def fan_in_ratio(self) -> float:
+        """
+        Ratio expéditeurs distincts / transactions reçues.
+
+        Proche de 1.0 → presque chaque transaction vient d'un expéditeur
+        différent (profil mule typique : beaucoup de petites sources
+        distinctes, rarement les mêmes clients qui reviennent).
+
+        Proche de 0.0 → les mêmes expéditeurs reviennent régulièrement
+        (profil marchand typique : clients fidèles, achats répétés).
+        """
+        if self.total_transactions_received == 0:
+            return 0.0
+        return self.distinct_senders_30d / self.total_transactions_received
+
+    def has_high_fan_in(self, threshold: int = 15) -> bool:
+        """
+        True si ce compte a reçu de beaucoup d'expéditeurs différents
+        récemment. Seuil volontairement plus permissif que many_beneficiaries
+        côté expéditeur, car un compte peut légitimement recevoir de
+        plusieurs sources (famille, remboursements) sans être un marchand
+        ni une mule — le seuil seul ne suffit jamais, voir is_likely_mule().
+        """
+        return self.distinct_senders_30d > threshold
+
+    def outflow_speed_hours(self) -> Optional[float]:
+        """
+        Délai en heures entre la dernière réception et la dernière sortie
+        de fonds qui la suit. None si aucune sortie n'a encore eu lieu
+        après la dernière réception (l'argent est resté sur le compte).
+
+        Un délai court et répété est le signal le plus fort de compte mule :
+        l'argent ne fait que transiter, il ne s'accumule jamais réellement.
+        """
+        if not self.last_received_at or not self.last_outflow_at:
+            return None
+        if self.last_outflow_at < self.last_received_at:
+            # La dernière sortie a eu lieu AVANT la dernière réception
+            # → pas de sortie consécutive à mesurer pour l'instant
+            return None
+        delta = self.last_outflow_at - self.last_received_at
+        return delta.total_seconds() / 3600
+
+    def is_likely_mule(
+        self,
+        is_merchant: bool,
+        fan_in_threshold: int = 15,
+        outflow_hours_threshold: float = 24.0,
+    ) -> bool:
+        """
+        Combine les trois signaux nécessaires pour suspecter un compte mule,
+        plutôt que de se fier à un seul critère qui confondrait un marchand
+        légitime avec une mule.
+
+        Conditions réunies :
+            1. Fan-in élevé      — reçoit de nombreuses sources différentes
+            2. PAS marchand      — un vrai marchand déclaré est exclu d'office
+            3. Sortie rapide     — l'argent reçu repart vite, ne s'accumule pas
+
+        Un supermarché avec un fan-in élevé mais beneficiary_is_merchant=True
+        et qui garde ses fonds (pas de sortie rapide) ne sera jamais flaggé
+        par cette méthode, même avec des centaines de clients par jour.
+        """
+        if is_merchant:
+            return False
+        if not self.has_high_fan_in(fan_in_threshold):
+            return False
+        outflow = self.outflow_speed_hours()
+        if outflow is None:
+            return False
+        return outflow <= outflow_hours_threshold
+
+    def __repr__(self) -> str:
+        return (
+            f"BeneficiaryProfile("
+            f"token={self.beneficiary_token}, "
+            f"operator={self.operator}, "
+            f"distinct_senders_30d={self.distinct_senders_30d}, "
+            f"tx_received={self.total_transactions_received}"
             f")"
         )

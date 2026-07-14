@@ -34,6 +34,8 @@ import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from application.use_cases import (
     AnalyzeTransactionInput,
@@ -53,6 +55,21 @@ from presentation.schemas import (
     ScoreOut,
     ShapReasonOut,
     TransactionIn,
+)
+from infrastructure.monitoring import (
+    transactions_total,
+    decisions_total,
+    cache_hits_total,
+    cache_misses_total,
+    rate_limit_rejections_total,
+    errors_total,
+    fraud_type_total,
+    inference_duration_seconds,
+    fraud_score_distribution,
+    service_uptime_seconds,
+    model_ready_gauge,
+    queue_size_gauge,
+    rate_limit_usage_gauge,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,6 +216,23 @@ async def analyze_transaction(
     """
     start = time.monotonic()
 
+    # ── Métrique : transaction reçue ──────────────
+    transactions_total.labels(operator=data.operator).inc()
+
+    # ── Étape 0 : Rate limiting par opérateur ─────
+    rate_limiter = request.app.state.rate_limiter
+    if not await rate_limiter.check(data.operator):
+        rate_limit_rejections_total.labels(operator=data.operator).inc()
+        usage = await rate_limiter.get_usage(data.operator)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Limite de requêtes dépassée pour {data.operator} : "
+                f"{usage.get('current_count', 0)}/{usage.get('limit_per_minute', 0)} "
+                f"req/min. Réessayez dans quelques secondes."
+            )
+        )
+
     logger.info(
         "Requête /analyze reçue",
         extra={
@@ -216,14 +250,18 @@ async def analyze_transaction(
     cache = request.app.state.prediction_cache
     cached = await cache.get(data.transaction_id, data.operator)
     if cached:
+        cache_hits_total.labels(operator=data.operator).inc()
         logger.info(
             "Cache HIT — retour immédiat",
             extra={"transaction_id": data.transaction_id}
         )
         return ScoreOut(**{k: v for k, v in cached.items() if k != "from_cache"})
 
+    cache_misses_total.labels(operator=data.operator).inc()
+
     # ── Étape 2 : Vérifie que le modèle est prêt ──
     if not await request.app.state.xgboost_model.is_ready():
+        errors_total.labels(operator=data.operator, error_type="model_not_ready").inc()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Modèle ML non chargé — réessayez dans quelques secondes"
@@ -232,16 +270,18 @@ async def analyze_transaction(
     # ── Étape 3 : Convertit schema → domain ───────
     transaction = schema_to_transaction(data)
 
-    # ── Étape 4 : Pipeline ML ─────────────────────
+    # ── Étape 4 : Pipeline ML (chronométré) ───────
     use_case: AnalyzeTransactionUseCase = request.app.state.use_case
     try:
-        result = await use_case.execute(
-            AnalyzeTransactionInput(
-                transaction=transaction,
-                pre_computed_features=data.pre_computed_features,
+        with inference_duration_seconds.labels(operator=data.operator).time():
+            result = await use_case.execute(
+                AnalyzeTransactionInput(
+                    transaction=transaction,
+                    pre_computed_features=data.pre_computed_features,
+                )
             )
-        )
     except Exception as e:
+        errors_total.labels(operator=data.operator, error_type="pipeline_error").inc()
         logger.error(
             "Erreur pipeline ML",
             extra={
@@ -256,6 +296,18 @@ async def analyze_transaction(
 
     # ── Étape 5 : Convertit domain → schema ──────
     response = score_to_schema(result, data.transaction_id)
+
+    # ── Métriques : décision + score + type de fraude ─
+    decisions_total.labels(
+        operator=data.operator,
+        decision=response.decision,
+    ).inc()
+    fraud_score_distribution.labels(operator=data.operator).observe(response.score)
+    if result.fraud_score.is_fraud:
+        fraud_type_total.labels(
+            operator=data.operator,
+            fraud_type=result.fraud_score.suspected_fraud_type.value,
+        ).inc()
 
     # ── Étape 6 : Stocke dans le cache Redis ──────
     # Les prochains retries de .NET retourneront le cache
@@ -305,6 +357,19 @@ async def analyze_transaction_async(
     Le résultat sera disponible via GET /result/{transaction_id}.
     """
     queue = request.app.state.transaction_queue
+
+    # ── Rate limiting par opérateur ───────────────
+    rate_limiter = request.app.state.rate_limiter
+    if not await rate_limiter.check(data.operator):
+        usage = await rate_limiter.get_usage(data.operator)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Limite de requêtes dépassée pour {data.operator} : "
+                f"{usage.get('current_count', 0)}/{usage.get('limit_per_minute', 0)} "
+                f"req/min. Réessayez dans quelques secondes."
+            )
+        )
 
     msg_id = await queue.push(
         transaction_data=data.model_dump(mode="json"),
@@ -403,6 +468,10 @@ async def health_check(request: Request) -> HealthOut:
 
     uptime = time.monotonic() - request.app.state.start_time
 
+    # ── Métriques : santé des modèles + uptime ────
+    model_ready_gauge.labels(model_name="xgboost").set(1 if model_ready else 0)
+    service_uptime_seconds.set(uptime)
+
     return HealthOut(
         status="ok" if model_ready else "degraded",
         model_ready=model_ready,
@@ -441,3 +510,52 @@ async def model_info(
             for name, imp in top5
         ],
     }
+
+
+@router.get(
+    "/rate-limit/{operator}",
+    summary="Usage du rate limiting pour un opérateur",
+    description="Retourne le nombre de requêtes utilisées dans la minute en cours."
+)
+async def rate_limit_status(
+    operator: str,
+    request: Request,
+    _: str = Depends(verify_api_key),
+) -> dict:
+    """Monitoring du rate limiting — utile pour Grafana ou debug."""
+    rate_limiter = request.app.state.rate_limiter
+    return await rate_limiter.get_usage(operator.upper())
+
+
+@router.get(
+    "/metrics",
+    summary="Métriques Prometheus",
+    description=(
+        "Expose les métriques au format Prometheus pour scraping. "
+        "Pas d'authentification — appelé automatiquement par Prometheus."
+    ),
+    include_in_schema=False,
+)
+async def metrics(request: Request) -> Response:
+    """
+    Endpoint scrapé par Prometheus toutes les 15s (voir prometheus.yml).
+    Pas de X-Api-Key requis — Prometheus tourne dans le réseau interne Docker.
+
+    Met aussi à jour les gauges en temps réel (queue, rate limit)
+    juste avant de générer la réponse, pour des données fraîches.
+    """
+    # Rafraîchit les gauges de queue pour les opérateurs connus
+    queue = getattr(request.app.state, "transaction_queue", None)
+    if queue:
+        from infrastructure.stores.rate_limiter import RATE_LIMITS
+        for operator in RATE_LIMITS.keys():
+            try:
+                size = await queue.queue_size(operator)
+                queue_size_gauge.labels(operator=operator).set(size)
+            except Exception:
+                pass  # ne bloque jamais /metrics pour un souci de queue
+
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )

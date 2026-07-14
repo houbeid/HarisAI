@@ -17,11 +17,17 @@ Utilisation dans train_xgboost.py :
 from .base_loader import BaseLoader
 from .creditcard_loader import CreditcardLoader
 from .pysim_loader import PysimLoader
+from .aryan_loader import AryanLoader
+from .ibm_aml_loader import IBMAMLLoader
 
 # Registry — ajoute ici chaque nouveau loader
 REGISTRY: dict[str, BaseLoader] = {
     "creditcard": CreditcardLoader(),
     "pysim":      PysimLoader(),
+    "aryan":      AryanLoader(low_memory=True),   # local machine
+    "aryan_full": AryanLoader(low_memory=False),  # Kaggle 30GB RAM
+    "ibm_aml":      IBMAMLLoader(low_memory=True),   # local machine
+    "ibm_aml_full": IBMAMLLoader(low_memory=False),  # Kaggle 30GB RAM
 }
 
 __all__ = [

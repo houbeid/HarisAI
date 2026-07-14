@@ -17,13 +17,13 @@ from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
 from domain import (
-    Transaction, ClientProfile, FraudScore, Alert,
+    Transaction, ClientProfile, BeneficiaryProfile, FraudScore, Alert,
     Money, TokenHash, Channel, RiskLevel, FraudType,
     ShapReason,
 )
 from application.ports import (
     IFraudModel, IExplainableModel,
-    IProfileStore, IExplainer, IAuditStore,
+    IProfileStore, IBeneficiaryStore, IExplainer, IAuditStore,
 )
 from application.use_cases import (
     AnalyzeTransactionUseCase,
@@ -31,6 +31,7 @@ from application.use_cases import (
 )
 from infrastructure.stores import (
     InMemoryProfileStore,
+    InMemoryBeneficiaryStore,
     InMemoryAuditStore,
     InMemoryPredictionCache,
     InMemoryTransactionQueue,
@@ -298,6 +299,34 @@ def use_case(profile_store, audit_store) -> AnalyzeTransactionUseCase:
     )
 
 
+@pytest.fixture
+def beneficiary_store() -> InMemoryBeneficiaryStore:
+    """Store en mémoire pour les profils bénéficiaires (tests is_mule_pattern)."""
+    return InMemoryBeneficiaryStore()
+
+
+@pytest.fixture
+def use_case_with_beneficiary(
+    profile_store, audit_store, beneficiary_store
+) -> AnalyzeTransactionUseCase:
+    """
+    Use case configuré avec beneficiary_store branché — pour tester
+    le calcul de is_mule_pattern de bout en bout (voir le branchement
+    fait dans analyze_transaction.py : récupération en étape 1bis,
+    calcul en étape 2, mise à jour en étape 9).
+    """
+    return AnalyzeTransactionUseCase(
+        xgboost_model=MockXGBoostModel(),
+        isolation_model=MockPassThroughModel("isolation_forest"),
+        tft_model=MockPassThroughModel("tft_aml"),
+        gnn_model=MockPassThroughModel("gnn_network"),
+        profile_store=profile_store,
+        explainer=MockExplainer(),
+        audit_store=audit_store,
+        beneficiary_store=beneficiary_store,
+    )
+
+
 # ─────────────────────────────────────────────
 # FIXTURES — application FastAPI
 # ─────────────────────────────────────────────
@@ -310,11 +339,13 @@ def test_app(use_case, prediction_cache, transaction_queue) -> FastAPI:
     """
     from main import app
     from infrastructure.ml.models.xgboost_model import XGBoostModel
+    from infrastructure.stores import InMemoryRateLimiter
 
     # Injecte les mocks dans l'état de l'app
     app.state.use_case          = use_case
     app.state.prediction_cache  = prediction_cache
     app.state.transaction_queue = transaction_queue
+    app.state.rate_limiter      = InMemoryRateLimiter()
     app.state.xgboost_model     = MockXGBoostModel()
     app.state.start_time        = 0.0
 

@@ -40,7 +40,9 @@ from application.use_cases import (
 )
 from infrastructure.stores import (
     RedisProfileStore, InMemoryProfileStore,
+    RedisBeneficiaryStore, InMemoryBeneficiaryStore,
     PredictionCache, InMemoryPredictionCache,
+    RateLimiter, InMemoryRateLimiter,
 )
 from infrastructure.stores.transaction_queue import (
     TransactionQueue, InMemoryTransactionQueue
@@ -52,6 +54,7 @@ from infrastructure.ml.models.xgboost_model import XGBoostModel
 from infrastructure.ml.models.isolation_forest import IsolationForestModel
 from infrastructure.ml.models.tft_model import TFTModel
 from infrastructure.ml.models.gnn_model import GNNModel
+from infrastructure.federated.model_updater import ModelUpdater
 
 # ─────────────────────────────────────────────
 # LOGGING
@@ -84,18 +87,24 @@ async def lifespan(app: FastAPI):
     # ── Étape 1 : Redis ───────────────────────
     logger.info("1/5 — Connexion Redis...")
     redis_store = RedisProfileStore(redis_url=settings.redis_url)
+    beneficiary_store = RedisBeneficiaryStore(redis_url=settings.redis_url)
     try:
         await redis_store.connect()
+        await beneficiary_store.connect()
         prediction_cache  = PredictionCache(redis_client=redis_store._client)
         transaction_queue = TransactionQueue(redis_client=redis_store._client)
-        logger.info("    ✅ Redis connecté + Cache + Queue activés")
+        rate_limiter      = RateLimiter(redis_client=redis_store._client)
+        logger.info("    ✅ Redis connecté + Cache + Queue + RateLimiter activés")
     except Exception as e:
         logger.warning(f"    ⚠ Redis indisponible : {e} — mode dégradé")
         redis_store       = InMemoryProfileStore()
+        beneficiary_store = InMemoryBeneficiaryStore()
         prediction_cache  = InMemoryPredictionCache()
         transaction_queue = InMemoryTransactionQueue()
+        rate_limiter      = InMemoryRateLimiter()
 
     app.state.prediction_cache  = prediction_cache
+    app.state.rate_limiter      = rate_limiter
     app.state.transaction_queue = transaction_queue
 
     # ── Étape 2 : PostgreSQL ──────────────────
@@ -181,8 +190,18 @@ async def lifespan(app: FastAPI):
         profile_store=redis_store,
         explainer=explainer,
         audit_store=audit_store,
+        beneficiary_store=beneficiary_store,
     )
     app.state.use_case = use_case
+
+    # ── ModelUpdater — hot-reload sans downtime ─
+    updater = ModelUpdater(
+        models_dir="models/",
+        use_case=use_case,
+        check_interval=60,
+    )
+    updater.start()
+    app.state.model_updater = updater
 
     logger.info("═" * 55)
     logger.info("  ✅ HarisAI prêt — en attente de transactions")
@@ -219,8 +238,12 @@ async def lifespan(app: FastAPI):
     # ── Arrêt propre ──────────────────────────
     logger.info("Arrêt du service HarisAI...")
     await transaction_queue.stop_worker()
+    if hasattr(app.state, 'model_updater'):
+        await app.state.model_updater.stop()
     if hasattr(redis_store, 'disconnect'):
         await redis_store.disconnect()
+    if hasattr(beneficiary_store, 'disconnect'):
+        await beneficiary_store.disconnect()
     if hasattr(audit_store, 'disconnect'):
         await audit_store.disconnect()
     logger.info("✅ Service arrêté proprement")

@@ -8,7 +8,7 @@ import pytest
 from datetime import datetime, timedelta
 
 from domain import (
-    Transaction, ClientProfile, FraudScore, Alert,
+    Transaction, ClientProfile, BeneficiaryProfile, FraudScore, Alert,
     Money, TokenHash, ShapReason,
     Currency, Channel, RiskLevel, FraudType,
     AlertStatus, AlertPriority,
@@ -233,6 +233,64 @@ class TestFraudScore:
         total = WEIGHT_XGBOOST + WEIGHT_ISOFOREST + WEIGHT_TFT + WEIGHT_GNN
         assert abs(total - 1.0) < 0.001
 
+    def _make_score(self, client_token, xgb, iso, tft, gnn):
+        return FraudScore.compute(
+            transaction_id="BNK-OVERRIDE",
+            client_token=client_token,
+            xgboost_score=xgb,
+            isolation_score=iso,
+            tft_score=tft,
+            gnn_score=gnn,
+            shap_reasons=[],
+            suspected_fraud_type=FraudType.UNKNOWN,
+            model_version="1.0.0",
+        )
+
+    def test_override_gnn_seul_confiance_max_pas_noye(self, client_token):
+        """
+        Avant le mécanisme de dépassement : GNN seul à 1.0 donnait
+        final_score=0.15 (1.0*WEIGHT_GNN), sous THRESHOLD_REVIEW (0.40)
+        — un GNN certain à 100% d'une fraude n'aurait déclenché aucune
+        revue humaine. C'est le cas concret qui a motivé ce mécanisme.
+        """
+        score = self._make_score(client_token, xgb=0.0, iso=0.0, tft=0.0, gnn=1.0)
+        assert score.final_score < 0.40  # la moyenne pondérée seule reste basse
+        assert score.risk_level == RiskLevel.REVIEW  # mais l'override corrige
+
+    def test_override_tft_seul_confiance_max_pas_noye(self, client_token):
+        score = self._make_score(client_token, xgb=0.0, iso=0.0, tft=1.0, gnn=0.0)
+        assert score.risk_level == RiskLevel.REVIEW
+
+    def test_override_xgboost_force_block(self, client_token):
+        """XGBoost est le seul modèle assez mature pour forcer BLOCK seul."""
+        score = self._make_score(client_token, xgb=0.95, iso=0.0, tft=0.0, gnn=0.0)
+        assert score.risk_level == RiskLevel.BLOCK
+
+    def test_override_gnn_ne_force_jamais_block(self, client_token):
+        """
+        Un modèle secondaire (IsoForest/TFT/GNN) très confiant force au
+        maximum REVIEW, jamais BLOCK — ces modèles ne sont pas encore
+        validés en production (voir chapitre 6 doc technique).
+        """
+        score = self._make_score(client_token, xgb=0.0, iso=0.0, tft=0.0, gnn=0.95)
+        assert score.risk_level == RiskLevel.REVIEW
+        assert score.risk_level != RiskLevel.BLOCK
+
+    def test_override_ne_retrograde_jamais(self, client_token):
+        """
+        Si la moyenne pondérée donne déjà BLOCK, un override REVIEW
+        (déclenché par un des 4 scores individuels) ne doit jamais
+        rétrograder la décision à REVIEW.
+        """
+        score = self._make_score(client_token, xgb=0.9, iso=0.9, tft=0.9, gnn=0.95)
+        assert score.risk_level == RiskLevel.BLOCK
+
+    def test_override_n_affecte_pas_cas_normal(self, client_token):
+        """Sans score extrême (>=0.90), le comportement est inchangé — pure moyenne pondérée."""
+        score = self._make_score(client_token, xgb=0.3, iso=0.3, tft=0.3, gnn=0.3)
+        assert score.risk_level == RiskLevel.APPROVE
+        assert abs(score.final_score - 0.30) < 0.001
+
 
 # ═══════════════════════════════════════════════════
 # ALERT
@@ -339,3 +397,261 @@ class TestAlert:
         )
         alert.confirm_fraud("officer_hassan")
         assert alert.requires_str_report == True
+
+
+# ═══════════════════════════════════════════════════
+# BENEFICIARY PROFILE — détection de comptes mules
+# ═══════════════════════════════════════════════════
+
+class TestBeneficiaryProfile:
+    """
+    BeneficiaryProfile suit le compte qui REÇOIT l'argent, symétrique
+    à ClientProfile qui suit celui qui ENVOIE. Nécessaire pour distinguer
+    un compte mule d'un marchand légitime (supermarché, boutique,
+    restaurant) qui reçoit lui aussi de très nombreux clients différents
+    chaque jour — un fan-in élevé seul ne suffit jamais à conclure.
+    """
+
+    def _make_token(self, prefix: str) -> TokenHash:
+        return TokenHash((prefix * 64)[:64])
+
+    def test_nouveau_beneficiaire_sans_historique(self):
+        """Un compte qui n'a encore rien reçu n'est jamais flaggé mule."""
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+        )
+        assert profile.fan_in_ratio() == 0.0
+        assert profile.has_high_fan_in() is False
+        assert profile.is_likely_mule(is_merchant=False) is False
+
+    def test_is_new_sender(self):
+        """Détecte si un expéditeur est nouveau pour ce bénéficiaire."""
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            known_sender_tokens=["x" * 64],
+        )
+        assert profile.is_new_sender(TokenHash("y" * 64)) is True
+        assert profile.is_new_sender(TokenHash("x" * 64)) is False
+
+    def test_fan_in_ratio_mule_typique(self):
+        """
+        Une mule a un fan_in_ratio proche de 1.0 — presque chaque
+        transaction reçue vient d'un expéditeur différent, contrairement
+        à un marchand dont les clients reviennent régulièrement.
+        """
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            distinct_senders_30d=25,
+            total_transactions_received=27,
+        )
+        assert profile.fan_in_ratio() == pytest.approx(25 / 27, rel=1e-3)
+
+    def test_outflow_speed_apres_reception(self):
+        """Mesure le délai entre réception et sortie de fonds suivante."""
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            last_received_at=datetime(2026, 6, 18, 10, 0),
+            last_outflow_at=datetime(2026, 6, 18, 14, 0),
+        )
+        assert profile.outflow_speed_hours() == pytest.approx(4.0)
+
+    def test_outflow_speed_aucune_sortie_encore(self):
+        """Sans sortie de fonds après réception, le délai est None."""
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            last_received_at=datetime(2026, 6, 18, 10, 0),
+            last_outflow_at=None,
+        )
+        assert profile.outflow_speed_hours() is None
+
+    def test_outflow_speed_sortie_anterieure_a_reception(self):
+        """
+        Si la dernière sortie est ANTÉRIEURE à la dernière réception
+        (l'argent reçu n'est pas encore reparti), pas de délai mesurable.
+        """
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            last_received_at=datetime(2026, 6, 18, 14, 0),
+            last_outflow_at=datetime(2026, 6, 18, 10, 0),  # avant
+        )
+        assert profile.outflow_speed_hours() is None
+
+    def test_mule_detectee_fan_in_eleve_non_marchand_sortie_rapide(self):
+        """
+        Cas central — combine les trois conditions du pattern mule :
+        fan-in élevé, pas marchand, sortie rapide après réception.
+        Doit être détectée comme suspecte.
+        """
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            distinct_senders_30d=25,
+            total_transactions_received=27,
+            last_received_at=datetime(2026, 6, 18, 10, 0),
+            last_outflow_at=datetime(2026, 6, 18, 13, 0),  # 3h après
+        )
+        assert profile.is_likely_mule(is_merchant=False) is True
+
+    def test_marchand_legitime_jamais_flagge_meme_fan_in_tres_eleve(self):
+        """
+        Cas critique pour le contexte mauritanien — un supermarché,
+        une boutique ou un restaurant affilié à Bankily/Sedad reçoit
+        légitimement des centaines de clients différents chaque jour.
+        is_merchant=True doit exclure ce compte d'office, quel que
+        soit son fan-in.
+        """
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            distinct_senders_30d=300,  # fan-in énorme, supermarché actif
+            total_transactions_received=320,
+            last_received_at=datetime(2026, 6, 18, 18, 0),
+            last_outflow_at=datetime(2026, 6, 18, 19, 0),  # sort vite aussi (fournisseurs)
+        )
+        assert profile.is_likely_mule(is_merchant=True) is False
+
+    def test_marchand_non_declare_mais_garde_ses_fonds_pas_flagge(self):
+        """
+        Filet de sécurité supplémentaire — même si beneficiary_is_merchant
+        est mal renseigné (False par erreur) pour un commerce légitime,
+        l'absence de sortie rapide (le commerce garde son chiffre
+        d'affaires au lieu de le faire transiter) empêche le flag.
+        """
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            distinct_senders_30d=300,
+            total_transactions_received=320,
+            last_received_at=datetime(2026, 6, 18, 18, 0),
+            last_outflow_at=datetime(2026, 5, 1, 9, 0),  # vieille sortie, pas liée
+        )
+        assert profile.is_likely_mule(is_merchant=False) is False
+
+    def test_fan_in_faible_jamais_flagge_meme_sortie_rapide(self):
+        """
+        Un compte qui reçoit de très peu de sources différentes mais
+        fait sortir l'argent vite n'est pas un profil mule typique
+        (ex: un client qui reçoit un remboursement puis paie une facture).
+        Le fan-in élevé est une condition nécessaire, pas accessoire.
+        """
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            distinct_senders_30d=2,
+            total_transactions_received=2,
+            last_received_at=datetime(2026, 6, 18, 10, 0),
+            last_outflow_at=datetime(2026, 6, 18, 10, 30),
+        )
+        assert profile.is_likely_mule(is_merchant=False) is False
+
+    def test_sortie_trop_lente_jamais_flaggee(self):
+        """
+        Fan-in élevé et non-marchand, mais la sortie de fonds survient
+        plusieurs jours après réception — pas le pattern mule typique
+        de transit rapide, ne doit pas être flaggé par défaut (24h).
+        """
+        profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("a"),
+            operator="BANKILY",
+            distinct_senders_30d=20,
+            total_transactions_received=22,
+            last_received_at=datetime(2026, 6, 10, 10, 0),
+            last_outflow_at=datetime(2026, 6, 18, 10, 0),  # 8 jours après
+        )
+        assert profile.is_likely_mule(is_merchant=False) is False
+
+
+# ═══════════════════════════════════════════════════
+# FEATURE ENGINEERING — is_mule_pattern
+# ═══════════════════════════════════════════════════
+
+class TestIsMulePatternFeature:
+    """
+    Vérifie l'intégration de is_mule_pattern dans FeatureEngineering —
+    la 7e feature AML, qui dépend de BeneficiaryProfile en plus de
+    ClientProfile (contrairement aux 6 autres features AML).
+    """
+
+    def _make_token(self, prefix: str) -> TokenHash:
+        return TokenHash((prefix * 64)[:64])
+
+    def test_sans_beneficiary_profile_vaut_zero(self, tx_normale, client_profile):
+        """
+        Compatibilité ascendante — les appels existants qui ne passent
+        pas beneficiary_profile ne doivent pas casser, et la feature
+        vaut 0.0 par défaut plutôt que de lever une erreur.
+        """
+        from infrastructure.ml.features.feature_engineering import (
+            FeatureEngineering, AML_FEATURE_NAMES,
+        )
+        fe = FeatureEngineering()
+        feature_set = fe.compute(tx_normale, client_profile)
+        assert feature_set.get("is_mule_pattern") == 0.0
+        assert "is_mule_pattern" in AML_FEATURE_NAMES
+
+    def test_avec_profil_mule_la_feature_vaut_un(self, tx_normale, client_profile):
+        """Un profil bénéficiaire mule fait passer la feature à 1.0."""
+        from infrastructure.ml.features.feature_engineering import FeatureEngineering
+
+        mule_profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("b"),
+            operator="BANKILY",
+            distinct_senders_30d=25,
+            total_transactions_received=27,
+            last_received_at=datetime(2026, 6, 18, 10, 0),
+            last_outflow_at=datetime(2026, 6, 18, 13, 0),
+        )
+        fe = FeatureEngineering()
+        feature_set = fe.compute(
+            tx_normale, client_profile, beneficiary_profile=mule_profile
+        )
+        assert feature_set.get("is_mule_pattern") == 1.0
+
+    def test_avec_profil_marchand_la_feature_vaut_zero(self, client_token):
+        """
+        Un marchand légitime avec fan-in élevé ne doit jamais faire
+        passer is_mule_pattern à 1.0, même avec beaucoup d'expéditeurs.
+        """
+        from infrastructure.ml.features.feature_engineering import FeatureEngineering
+
+        tx_merchant = Transaction(
+            transaction_id="TX-MERCHANT",
+            client_token=client_token,
+            amount=Money(5000.0),
+            timestamp=datetime(2026, 6, 18, 14, 0),
+            channel=Channel.MOBILE_APP,
+            zone="NOUAKCHOTT",
+            operator="BANKILY",
+            device_id="dev1",
+            beneficiary_token=self._make_token("c"),
+            beneficiary_is_merchant=True,
+        )
+        merchant_profile = BeneficiaryProfile(
+            beneficiary_token=self._make_token("c"),
+            operator="BANKILY",
+            distinct_senders_30d=300,
+            total_transactions_received=320,
+            last_received_at=datetime(2026, 6, 18, 18, 0),
+            last_outflow_at=datetime(2026, 6, 18, 19, 0),
+        )
+        fe = FeatureEngineering()
+        client_profile = ClientProfile(client_token=client_token, operator="BANKILY")
+        feature_set = fe.compute(
+            tx_merchant, client_profile, beneficiary_profile=merchant_profile
+        )
+        assert feature_set.get("is_mule_pattern") == 0.0
+
+    def test_is_mule_pattern_dans_aml_features(self, tx_normale, client_profile):
+        """is_mule_pattern doit apparaître dans aml_features(), pas xgboost_features()."""
+        from infrastructure.ml.features.feature_engineering import FeatureEngineering
+
+        fe = FeatureEngineering()
+        feature_set = fe.compute(tx_normale, client_profile)
+        assert "is_mule_pattern" in feature_set.aml_features()
+        assert "is_mule_pattern" not in feature_set.xgboost_features()
