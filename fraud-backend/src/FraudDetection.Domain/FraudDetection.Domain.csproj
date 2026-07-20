@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!--
+    Aucune dépendance NuGet dans le Domain — c'est intentionnel.
+    Le Domain ne connaît rien de FastAPI, EF Core, Redis, ou ASP.NET.
+    Toute tentative d'ajouter un package ici est un signal d'alarme
+    indiquant que la logique appartient probablement à Infrastructure.
+  -->
+
+</Project>
