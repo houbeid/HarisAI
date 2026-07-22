@@ -100,6 +100,33 @@ public sealed class Transaction
     /// </summary>
     public bool IsSelfTransfer => ClientToken.IsSameAs(BeneficiaryToken);
 
+    /// <summary>
+    /// Retourne une nouvelle Transaction identique avec sim_changed_72h corrigé.
+    /// Utilisé exclusivement par ISimChangeService.EnrichAsync() quand l'opérateur
+    /// ne fournit pas cette information dans son webhook et qu'une source télécom
+    /// locale permet de la calculer.
+    ///
+    /// Tous les autres champs sont préservés à l'identique — pas de revalidation
+    /// des cohérences métier (channel/ussdSession, agentId/channel) car la transaction
+    /// a déjà passé le constructeur avec succès.
+    /// </summary>
+    public Transaction WithSimChanged72h(bool simChanged72h, DateTime? simChangedAt = null) =>
+        new(
+            transactionId: TransactionId,
+            clientToken: ClientToken,
+            amount: Amount,
+            channel: Channel,
+            zone: Zone,
+            @operator: Operator,
+            deviceId: DeviceId,
+            simChanged72h: simChanged72h,
+            simChangedAt: simChangedAt ?? SimChangedAt,
+            beneficiaryToken: BeneficiaryToken,
+            beneficiaryIsMerchant: BeneficiaryIsMerchant,
+            agentId: AgentId,
+            ussdSession: UssdSession,
+            timestamp: Timestamp);
+
     public override string ToString() =>
         $"[{TransactionId}] {Amount} via {Channel} — Operator={Operator}";
 }

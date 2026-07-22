@@ -15,12 +15,14 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Moq" Version="4.20.70" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <PackageReference Include="WireMock.Net" Version="1.6.5" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../FraudDetection.Domain/FraudDetection.Domain.csproj" />
     <ProjectReference Include="../FraudDetection.Application/FraudDetection.Application.csproj" />
+    <ProjectReference Include="../FraudDetection.Infrastructure/FraudDetection.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

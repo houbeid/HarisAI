@@ -63,25 +63,33 @@ public class AnalyzeTransactionValidatorTests
     // ── OperatorCode ──────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("bankily")]     // Minuscules — rejeté par le regex ^[A-Z0-9_]+$
-    [InlineData("Bankily")]     // Mixte — rejeté
-    [InlineData("BANK ILY")]   // Espace — rejeté
-    [InlineData("BANK-ILY")]   // Tiret — rejeté
+    [InlineData("bankily")]     // Minuscules — normalisé en "BANKILY" par RawWebhookPayload, donc VALIDE
+    [InlineData("Bankily")]     // Mixte — normalisé en "BANKILY" par RawWebhookPayload, donc VALIDE
+    public void Validate_LowercaseOperatorCode_IsValidAfterNormalization(string operatorCode)
+    {
+        // RawWebhookPayload normalise en majuscules dans son constructeur
+        // (ToUpperInvariant()) — le Validator ne voit donc jamais de minuscules.
+        // Ce test documente ce comportement explicitement plutôt que de le supposer.
+        var result = _validator.Validate(BuildValidCommand(operatorCode: operatorCode));
+
+        Assert.True(result.IsValid);
+    }
+
+    [Theory]
+    [InlineData("BANK ILY")]   // Espace — rejeté par le regex ^[A-Z0-9_]+$
+    [InlineData("BANK-ILY")]   // Tiret — rejeté par le regex ^[A-Z0-9_]+$
     public void Validate_InvalidOperatorCodeFormat_ReturnsError(string operatorCode)
     {
-        // RawWebhookPayload normalise en majuscules dans son constructeur —
-        // les minuscules passent donc. On teste directement le validator
-        // avec un payload dont l'opérateur contient des caractères invalides.
-        // Note : le validator reçoit la valeur APRÈS normalisation uppercase
-        // de RawWebhookPayload. Les cas avec espace et tiret sont les vrais
-        // cas de rejet par le regex ^[A-Z0-9_]+$.
-        if (operatorCode.Contains(' ') || operatorCode.Contains('-'))
-        {
-            // Ces cas lèvent une exception dans RawWebhookPayload avant même
-            // d'atteindre le validator — la validation structurelle est en amont.
-            Assert.Throws<ArgumentException>(() =>
-                ApplicationTestFixtures.BuildPayload(operatorCode: operatorCode));
-        }
+        // RawWebhookPayload ne valide QUE la non-vacuité — il ne rejette jamais
+        // un format invalide, il se contente de normaliser la casse.
+        // C'est AnalyzeTransactionCommandValidator (FluentValidation) qui applique
+        // le regex ^[A-Z0-9_]+$ et rejette espace/tiret. Validation structurelle
+        // centralisée dans une seule couche — pas dupliquée dans le DTO.
+        var result = _validator.Validate(BuildValidCommand(operatorCode: operatorCode));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors,
+            e => e.PropertyName.Contains("OperatorCode"));
     }
 
     // ── RawBody ───────────────────────────────────────────────────────────────
