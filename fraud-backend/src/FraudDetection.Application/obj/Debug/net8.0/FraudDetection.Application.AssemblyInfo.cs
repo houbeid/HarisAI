@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("FraudDetection.Application")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6794ec9cc746efa42f3a5f488e76b7290f92c11b")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c568c03d6a0c71742e6a95a0e08d88f944976850")]
 [assembly: System.Reflection.AssemblyProductAttribute("FraudDetection.Application")]
 [assembly: System.Reflection.AssemblyTitleAttribute("FraudDetection.Application")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
