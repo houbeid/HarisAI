@@ -16,15 +16,18 @@
     </PackageReference>
     <PackageReference Include="Moq" Version="4.20.70" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
     <PackageReference Include="WireMock.Net" Version="1.6.5" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="3.10.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.10" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="8.0.10" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../FraudDetection.Domain/FraudDetection.Domain.csproj" />
     <ProjectReference Include="../FraudDetection.Application/FraudDetection.Application.csproj" />
     <ProjectReference Include="../FraudDetection.Infrastructure/FraudDetection.Infrastructure.csproj" />
+    <ProjectReference Include="../FraudDetection.Worker/FraudDetection.Worker.csproj" />
   </ItemGroup>
 
 </Project>

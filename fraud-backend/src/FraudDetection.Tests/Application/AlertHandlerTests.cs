@@ -1,6 +1,7 @@
 using FraudDetection.Application.Commands.CreateAlert;
 using FraudDetection.Application.Commands.GenerateStrReport;
 using FraudDetection.Application.Commands.ValidateAlert;
+using FraudDetection.Application.Exceptions;
 using FraudDetection.Application.Interfaces;
 using FraudDetection.Domain.Entities;
 using MediatR;
@@ -17,12 +18,14 @@ namespace FraudDetection.Tests.Application;
 public class CreateAlertHandlerTests
 {
     private readonly Mock<IAlertRepository> _alertRepoMock = new();
+    private readonly Mock<IAlertNotifier> _alertNotifierMock = new();
     private readonly CreateAlertHandler _handler;
 
     public CreateAlertHandlerTests()
     {
         _handler = new CreateAlertHandler(
             alertRepository: _alertRepoMock.Object,
+            alertNotifier: _alertNotifierMock.Object,
             logger: NullLogger<CreateAlertHandler>.Instance);
     }
 
@@ -54,6 +57,35 @@ public class CreateAlertHandlerTests
     }
 
     [Fact]
+    public async Task Handle_NewAlert_NotifiesConnectedAgents()
+    {
+        _alertRepoMock
+            .Setup(r => r.GetByTransactionIdAsync(
+                ApplicationTestFixtures.ValidTransactionId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Alert?)null);
+
+        var command = new CreateAlertCommand(
+            alertId: ApplicationTestFixtures.ValidAlertId,
+            transactionId: ApplicationTestFixtures.ValidTransactionId,
+            operatorCode: ApplicationTestFixtures.ValidOperatorCode,
+            score: ApplicationTestFixtures.BuildReviewScore());
+
+        await _handler.Handle(command, CancellationToken.None);
+
+        // La notification SignalR doit être déclenchée pour une nouvelle alerte
+        _alertNotifierMock.Verify(
+            n => n.NotifyNewAlertAsync(
+                ApplicationTestFixtures.ValidAlertId,
+                ApplicationTestFixtures.ValidTransactionId,
+                It.IsAny<string>(),
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task Handle_DuplicateTransaction_ReturnsAlreadyExisted()
     {
         // Alerte déjà existante — retry opérateur
@@ -78,6 +110,37 @@ public class CreateAlertHandlerTests
         // SaveAsync ne doit PAS être appelé — idempotence
         _alertRepoMock.Verify(
             r => r.SaveAsync(It.IsAny<Alert>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_DuplicateTransaction_DoesNotNotifyAgain()
+    {
+        var existingAlert = ApplicationTestFixtures.BuildAlert();
+        _alertRepoMock
+            .Setup(r => r.GetByTransactionIdAsync(
+                ApplicationTestFixtures.ValidTransactionId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingAlert);
+
+        var command = new CreateAlertCommand(
+            alertId: ApplicationTestFixtures.ValidAlertId,
+            transactionId: ApplicationTestFixtures.ValidTransactionId,
+            operatorCode: ApplicationTestFixtures.ValidOperatorCode,
+            score: ApplicationTestFixtures.BuildReviewScore());
+
+        await _handler.Handle(command, CancellationToken.None);
+
+        // Pas de nouvelle notification pour une alerte déjà existante —
+        // l'agent a déjà été notifié lors de la création originale.
+        _alertNotifierMock.Verify(
+            n => n.NotifyNewAlertAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -185,7 +248,7 @@ public class ValidateAlertHandlerTests
     }
 
     [Fact]
-    public async Task Handle_AlertNotFound_ThrowsInvalidOperationException()
+    public async Task Handle_AlertNotFound_ThrowsAlertNotFoundException()
     {
         _alertRepoMock
             .Setup(r => r.GetByAlertIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -196,12 +259,14 @@ public class ValidateAlertHandlerTests
             action: AlertValidationAction.Confirm,
             reviewedBy: ApplicationTestFixtures.ValidReviewedBy);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<AlertNotFoundException>(
             () => _handler.Handle(command, CancellationToken.None));
+
+        Assert.Equal("ALT-INEXISTANT", exception.AlertId);
     }
 
     [Fact]
-    public async Task Handle_AlreadyConfirmed_ThrowsInvalidOperationException()
+    public async Task Handle_AlreadyConfirmed_ThrowsAlertAlreadyProcessedException()
     {
         // Une alerte déjà traitée ne peut plus être modifiée
         // — règle métier imposée par Alert.Confirm() dans le Domain
@@ -219,7 +284,10 @@ public class ValidateAlertHandlerTests
             action: AlertValidationAction.Confirm,
             reviewedBy: "autre.agent@bankily.mr");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<AlertAlreadyProcessedException>(
             () => _handler.Handle(command, CancellationToken.None));
+
+        Assert.Equal(ApplicationTestFixtures.ValidAlertId, exception.AlertId);
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
     }
 }

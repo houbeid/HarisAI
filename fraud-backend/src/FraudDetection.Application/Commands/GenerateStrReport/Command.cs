@@ -96,9 +96,16 @@ public sealed record StrReportData
         RiskScore score,
         string confirmedBy,
         string? agentNote,
-        DateTime generatedAt)
+        DateTime generatedAt,
+        string? reportId = null)
     {
-        ReportId = $"STR-{operatorCode}-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()}";
+        // reportId fourni = reconstruction depuis la persistance (StrReportRepository) —
+        // on réutilise l'identifiant déjà stocké, on n'en génère jamais un nouveau.
+        // reportId absent = création d'un nouveau rapport (GenerateStrReportHandler) —
+        // génération d'un identifiant lisible basé sur generatedAt, pas DateTime.UtcNow,
+        // pour que l'horodatage dans l'ID reflète toujours GeneratedAt de façon cohérente.
+        ReportId = reportId
+            ?? $"STR-{operatorCode}-{generatedAt:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()}";
         AlertId = alertId;
         TransactionId = transactionId;
         OperatorCode = operatorCode;
@@ -138,10 +145,10 @@ public sealed record GenerateStrReportResult
 /// Handler de génération du rapport STR.
 ///
 /// COMPORTEMENT ACTUEL (en attente du format BCM) :
-///   Génère le rapport structuré depuis les données persistées localement
-///   et le logue avec niveau Warning — visible dans Grafana et dans
-///   l'agrégateur de logs du site. La transmission effective à la BCM
-///   sera ajoutée une fois IBcmReportingService implémenté.
+///   Génère le rapport structuré, le persiste localement via
+///   IStrReportRepository, et le logue avec niveau Warning — visible
+///   dans Grafana et dans l'agrégateur de logs du site. La transmission
+///   effective à la BCM sera ajoutée une fois IBcmReportingService implémenté.
 ///
 /// POURQUOI NE PAS BLOQUER LE PIPELINE EN ATTENDANT LA BCM :
 ///   La chaîne Alert.Confirm() → GenerateStrReport → transmission BCM
@@ -152,17 +159,17 @@ public sealed record GenerateStrReportResult
 public sealed class GenerateStrReportHandler
     : IRequestHandler<GenerateStrReportCommand, GenerateStrReportResult>
 {
-    private readonly ITransactionRepository _transactionRepository;
+    private readonly IStrReportRepository _strReportRepository;
     private readonly ILogger<GenerateStrReportHandler> _logger;
 
     // IBcmReportingService sera injecté ici une fois le format BCM connu.
     // private readonly IBcmReportingService _bcmReportingService;
 
     public GenerateStrReportHandler(
-        ITransactionRepository transactionRepository,
+        IStrReportRepository strReportRepository,
         ILogger<GenerateStrReportHandler> logger)
     {
-        _transactionRepository = transactionRepository;
+        _strReportRepository = strReportRepository;
         _logger = logger;
     }
 
@@ -170,6 +177,24 @@ public sealed class GenerateStrReportHandler
         GenerateStrReportCommand request,
         CancellationToken cancellationToken)
     {
+        // ── Idempotence — une alerte ne génère qu'un seul rapport STR ─────────
+        // Alert.Confirm() (Domain) ne peut s'exécuter qu'une fois par alerte —
+        // ce Handler ne devrait donc normalement être appelé qu'une seule fois
+        // par AlertId. Cette vérification est un filet de sécurité supplémentaire
+        // (ex: retry réseau côté ValidateAlertHandler) plutôt qu'un cas attendu.
+        var existing = await _strReportRepository.GetByAlertIdAsync(
+            request.AlertId, cancellationToken);
+
+        if (existing is not null)
+        {
+            _logger.LogWarning(
+                "Rapport STR déjà existant pour AlertId={AlertId} — " +
+                "ReportId={ReportId}. Génération ignorée (idempotence).",
+                request.AlertId, existing.ReportId);
+
+            return new GenerateStrReportResult(existing.ReportId, transmitted: false);
+        }
+
         // ── Construire le rapport STR ─────────────────────────────────────────
         var report = new StrReportData(
             alertId: request.AlertId,
@@ -180,7 +205,10 @@ public sealed class GenerateStrReportHandler
             agentNote: request.Note,
             generatedAt: request.GeneratedAt);
 
-        // ── Logger le rapport (audit local en attendant BCM) ──────────────────
+        // ── Persister le rapport ───────────────────────────────────────────────
+        await _strReportRepository.SaveAsync(report, cancellationToken);
+
+        // ── Logger le rapport (audit visible en attendant BCM) ─────────────────
         // Warning intentionnel — tout rapport STR doit être visible dans
         // Grafana et déclencher une notification aux superviseurs.
         _logger.LogWarning(
@@ -206,7 +234,7 @@ public sealed class GenerateStrReportHandler
         if (!transmitted)
         {
             _logger.LogInformation(
-                "Rapport STR {ReportId} généré localement — " +
+                "Rapport STR {ReportId} généré et persisté localement — " +
                 "transmission BCM en attente de IBcmReportingService.",
                 report.ReportId);
         }

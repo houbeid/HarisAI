@@ -7,7 +7,8 @@ using Xunit;
 
 namespace FraudDetection.Tests.Infrastructure.Persistence;
 
-public sealed class TransactionRepositoryTests : IClassFixture<PostgresFixture>, IAsyncLifetime
+[Collection("PostgresCollection")]
+public sealed class TransactionRepositoryTests : IAsyncLifetime
 {
     private readonly PostgresFixture _fixture;
     private readonly TransactionRepository _repository;

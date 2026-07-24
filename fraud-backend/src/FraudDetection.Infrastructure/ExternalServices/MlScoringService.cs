@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
 using FraudDetection.Application.Interfaces;
 using FraudDetection.Domain.Entities;
 using FraudDetection.Domain.Enums;
 using FraudDetection.Domain.ValueObjects;
 using FraudDetection.Infrastructure.ExternalServices.Dto;
+using FraudDetection.Infrastructure.Observability;
 using Microsoft.Extensions.Logging;
 using Polly.CircuitBreaker;
 
@@ -29,28 +31,49 @@ namespace FraudDetection.Infrastructure.ExternalServices;
 /// </summary>
 public sealed class MlScoringService : IMlScoringService
 {
-    private const string AnalyzeEndpoint = "/analyze";
-    private const string HealthEndpoint = "/health";
+    // Confirmé dans main.py de fraud-ml-service :
+    // app.include_router(router, prefix="/api/v1")
+    private const string AnalyzeEndpoint = "/api/v1/analyze";
+    private const string HealthEndpoint = "/api/v1/health";
 
     private readonly HttpClient _httpClient;
+    private readonly IMetricsCollector _metricsCollector;
     private readonly ILogger<MlScoringService> _logger;
 
-    public MlScoringService(HttpClient httpClient, ILogger<MlScoringService> logger)
+    public MlScoringService(
+        HttpClient httpClient,
+        IMetricsCollector metricsCollector,
+        ILogger<MlScoringService> logger)
     {
         _httpClient = httpClient;
+        _metricsCollector = metricsCollector;
         _logger = logger;
     }
 
     public async Task<RiskScore> AnalyzeAsync(
         Transaction transaction,
+        string correlationId,
         CancellationToken cancellationToken = default)
     {
+        var stopwatch = Stopwatch.StartNew();
+
         try
         {
             var requestDto = MapToTransactionInDto(transaction);
 
-            using var response = await _httpClient.PostAsJsonAsync(
-                AnalyzeEndpoint, requestDto, cancellationToken);
+            // Construction explicite du HttpRequestMessage plutôt que
+            // PostAsJsonAsync — nécessaire pour ajouter le header
+            // X-Correlation-Id par requête (DefaultRequestHeaders serait
+            // partagé entre toutes les requêtes concurrentes du HttpClient,
+            // ce qui casserait sous charge avec plusieurs transactions
+            // traitées en parallèle).
+            using var request = new HttpRequestMessage(HttpMethod.Post, AnalyzeEndpoint)
+            {
+                Content = JsonContent.Create(requestDto)
+            };
+            request.Headers.Add("X-Correlation-Id", correlationId);
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
 
             response.EnsureSuccessStatusCode();
 
@@ -64,10 +87,10 @@ public sealed class MlScoringService : IMlScoringService
                     "Application du fallback REVIEW.",
                     transaction.TransactionId);
 
-                return RiskScore.DefaultReview();
+                return RecordAndReturn(RiskScore.DefaultReview(), stopwatch);
             }
 
-            return MapToRiskScore(responseDto);
+            return RecordAndReturn(MapToRiskScore(responseDto), stopwatch);
         }
         catch (BrokenCircuitException ex)
         {
@@ -78,7 +101,7 @@ public sealed class MlScoringService : IMlScoringService
                 "TransactionId={TransactionId}. Fallback REVIEW appliqué sans appel réseau.",
                 transaction.TransactionId);
 
-            return RiskScore.DefaultReview();
+            return RecordAndReturn(RiskScore.DefaultReview(), stopwatch);
         }
         catch (HttpRequestException ex)
         {
@@ -87,7 +110,7 @@ public sealed class MlScoringService : IMlScoringService
                 "Fallback REVIEW appliqué.",
                 transaction.TransactionId);
 
-            return RiskScore.DefaultReview();
+            return RecordAndReturn(RiskScore.DefaultReview(), stopwatch);
         }
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -97,7 +120,7 @@ public sealed class MlScoringService : IMlScoringService
                 "Fallback REVIEW appliqué.",
                 transaction.TransactionId);
 
-            return RiskScore.DefaultReview();
+            return RecordAndReturn(RiskScore.DefaultReview(), stopwatch);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -110,8 +133,24 @@ public sealed class MlScoringService : IMlScoringService
                 "Fallback REVIEW appliqué. À investiguer — possible dérive de contrat.",
                 transaction.TransactionId);
 
-            return RiskScore.DefaultReview();
+            return RecordAndReturn(RiskScore.DefaultReview(), stopwatch);
         }
+    }
+
+    /// <summary>
+    /// Point unique d'enregistrement de la métrique fraudbackend_ml_calls_total /
+    /// fraudbackend_ml_call_duration_seconds — appelé à chaque sortie de
+    /// AnalyzeAsync (succès ou l'une des cinq branches de fallback), pour ne
+    /// jamais dupliquer la mesure de durée dans chaque catch.
+    /// isDefaultReview dérivé de RiskScore.FraudType, cohérent avec la même
+    /// vérification déjà faite dans AnalyzeTransactionHandler.
+    /// </summary>
+    private RiskScore RecordAndReturn(RiskScore score, Stopwatch stopwatch)
+    {
+        stopwatch.Stop();
+        var isDefaultReview = score.FraudType == "UNAVAILABLE";
+        _metricsCollector.RecordMlCall(isDefaultReview, stopwatch.Elapsed.TotalMilliseconds);
+        return score;
     }
 
     public async Task<bool> IsHealthyAsync(CancellationToken cancellationToken = default)

@@ -77,13 +77,16 @@ public sealed class CreateAlertHandler
     : IRequestHandler<CreateAlertCommand, CreateAlertResult>
 {
     private readonly IAlertRepository _alertRepository;
+    private readonly IAlertNotifier _alertNotifier;
     private readonly ILogger<CreateAlertHandler> _logger;
 
     public CreateAlertHandler(
         IAlertRepository alertRepository,
+        IAlertNotifier alertNotifier,
         ILogger<CreateAlertHandler> logger)
     {
         _alertRepository = alertRepository;
+        _alertNotifier = alertNotifier;
         _logger = logger;
     }
 
@@ -106,6 +109,8 @@ public sealed class CreateAlertHandler
                 request.TransactionId,
                 request.AlertId);
 
+            // Pas de nouvelle notification SignalR ici — l'agent a déjà été
+            // notifié lors de la création originale de cette alerte.
             return new CreateAlertResult(existing.Id, alreadyExisted: true);
         }
 
@@ -127,6 +132,20 @@ public sealed class CreateAlertHandler
             alert.Score.Decision,
             alert.Score.FraudType,
             alert.Operator);
+
+        // ── Notifier les agents connectés en temps réel ───────────────────────
+        // Appelé APRÈS SaveAsync réussi, jamais avant — un agent ne doit
+        // jamais être notifié d'une alerte qui n'existe pas encore en base.
+        // IAlertNotifier garantit ne jamais lever d'exception (voir son
+        // interface) — un échec de notification ne remet jamais en cause
+        // la création de l'alerte, déjà persistée avec succès à ce stade.
+        await _alertNotifier.NotifyNewAlertAsync(
+            alertId: alert.AlertId,
+            transactionId: alert.TransactionId,
+            decision: alert.Score.Decision.ToString(),
+            score: alert.Score.Score,
+            fraudType: alert.Score.FraudType,
+            cancellationToken: cancellationToken);
 
         return new CreateAlertResult(alert.Id);
     }

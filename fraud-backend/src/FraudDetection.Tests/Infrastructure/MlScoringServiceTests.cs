@@ -2,7 +2,9 @@ using FraudDetection.Domain.Entities;
 using FraudDetection.Domain.Enums;
 using FraudDetection.Domain.ValueObjects;
 using FraudDetection.Infrastructure.ExternalServices;
+using FraudDetection.Infrastructure.Observability;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -24,14 +26,18 @@ public sealed class MlScoringServiceTests : IDisposable
 {
     private readonly WireMockServer _server;
     private readonly HttpClient _httpClient;
+    private readonly Mock<IMetricsCollector> _metricsCollectorMock;
     private readonly MlScoringService _service;
 
     public MlScoringServiceTests()
     {
         _server = WireMockServer.Start();
         _httpClient = new HttpClient { BaseAddress = new Uri(_server.Url!) };
-        _service = new MlScoringService(_httpClient, NullLogger<MlScoringService>.Instance);
+        _metricsCollectorMock = new Mock<IMetricsCollector>();
+        _service = new MlScoringService(
+            _httpClient, _metricsCollectorMock.Object, NullLogger<MlScoringService>.Instance);
     }
+
 
     public void Dispose()
     {
@@ -63,7 +69,7 @@ public sealed class MlScoringServiceTests : IDisposable
     public async Task AnalyzeAsync_SendsCorrectJsonContract()
     {
         _server
-            .Given(Request.Create().WithPath("/analyze").UsingPost())
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
             .RespondWith(Response.Create()
                 .WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
@@ -75,7 +81,7 @@ public sealed class MlScoringServiceTests : IDisposable
                 }
                 """));
 
-        await _service.AnalyzeAsync(BuildTransaction(), CancellationToken.None);
+        await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
 
         var request = _server.LogEntries.Single().RequestMessage;
         var body = request.Body!;
@@ -95,7 +101,7 @@ public sealed class MlScoringServiceTests : IDisposable
     public async Task AnalyzeAsync_ApproveResponse_MapsToApproveRiskScore()
     {
         _server
-            .Given(Request.Create().WithPath("/analyze").UsingPost())
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
             .RespondWith(Response.Create()
                 .WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
@@ -107,7 +113,7 @@ public sealed class MlScoringServiceTests : IDisposable
                 }
                 """));
 
-        var result = await _service.AnalyzeAsync(BuildTransaction(), CancellationToken.None);
+        var result = await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
 
         Assert.Equal(20, result.Score);
         Assert.Equal(DecisionStatus.Approve, result.Decision);
@@ -118,7 +124,7 @@ public sealed class MlScoringServiceTests : IDisposable
     public async Task AnalyzeAsync_BlockResponse_MapsAllFields()
     {
         _server
-            .Given(Request.Create().WithPath("/analyze").UsingPost())
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
             .RespondWith(Response.Create()
                 .WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
@@ -138,7 +144,7 @@ public sealed class MlScoringServiceTests : IDisposable
                 }
                 """));
 
-        var result = await _service.AnalyzeAsync(BuildTransaction(), CancellationToken.None);
+        var result = await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
 
         Assert.Equal(87, result.Score);
         Assert.Equal(DecisionStatus.Block, result.Decision);
@@ -153,7 +159,7 @@ public sealed class MlScoringServiceTests : IDisposable
     {
         // Simule une dérive de contrat — Python renvoie une décision non reconnue
         _server
-            .Given(Request.Create().WithPath("/analyze").UsingPost())
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
             .RespondWith(Response.Create()
                 .WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
@@ -167,7 +173,7 @@ public sealed class MlScoringServiceTests : IDisposable
 
         // L'exception doit être catchée en interne et transformée en DefaultReview —
         // MlScoringService ne laisse jamais rien remonter au Handler.
-        var result = await _service.AnalyzeAsync(BuildTransaction(), CancellationToken.None);
+        var result = await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
 
         Assert.True(result.RequiresHumanReview);
         Assert.Equal(DecisionStatus.Review, result.Decision);
@@ -180,10 +186,10 @@ public sealed class MlScoringServiceTests : IDisposable
     public async Task AnalyzeAsync_ServerReturns500_ReturnsDefaultReview()
     {
         _server
-            .Given(Request.Create().WithPath("/analyze").UsingPost())
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(500));
 
-        var result = await _service.AnalyzeAsync(BuildTransaction(), CancellationToken.None);
+        var result = await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
 
         Assert.Equal(DecisionStatus.Review, result.Decision);
         Assert.Equal("UNAVAILABLE", result.FraudType);
@@ -194,7 +200,7 @@ public sealed class MlScoringServiceTests : IDisposable
     {
         _server.Stop(); // Simule un serveur totalement injoignable
 
-        var result = await _service.AnalyzeAsync(BuildTransaction(), CancellationToken.None);
+        var result = await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
 
         Assert.Equal(DecisionStatus.Review, result.Decision);
         Assert.True(result.RequiresHumanReview);
@@ -204,13 +210,13 @@ public sealed class MlScoringServiceTests : IDisposable
     public async Task AnalyzeAsync_MalformedJsonResponse_ReturnsDefaultReview()
     {
         _server
-            .Given(Request.Create().WithPath("/analyze").UsingPost())
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
             .RespondWith(Response.Create()
                 .WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("{ not valid json"));
 
-        var result = await _service.AnalyzeAsync(BuildTransaction(), CancellationToken.None);
+        var result = await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
 
         Assert.Equal(DecisionStatus.Review, result.Decision);
     }
@@ -221,7 +227,7 @@ public sealed class MlScoringServiceTests : IDisposable
     public async Task IsHealthyAsync_ServerReturns200_ReturnsTrue()
     {
         _server
-            .Given(Request.Create().WithPath("/health").UsingGet())
+            .Given(Request.Create().WithPath("/api/v1/health").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200));
 
         var result = await _service.IsHealthyAsync(CancellationToken.None);
@@ -233,7 +239,7 @@ public sealed class MlScoringServiceTests : IDisposable
     public async Task IsHealthyAsync_ServerReturns503_ReturnsFalse()
     {
         _server
-            .Given(Request.Create().WithPath("/health").UsingGet())
+            .Given(Request.Create().WithPath("/api/v1/health").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(503));
 
         var result = await _service.IsHealthyAsync(CancellationToken.None);
@@ -249,5 +255,77 @@ public sealed class MlScoringServiceTests : IDisposable
         var result = await _service.IsHealthyAsync(CancellationToken.None);
 
         Assert.False(result);
+    }
+
+    // ── Métriques (fraudbackend_ml_calls_total / fraudbackend_ml_call_duration_seconds) ──
+
+    [Fact]
+    public async Task AnalyzeAsync_SuccessfulCall_RecordsMetricWithSuccessOutcome()
+    {
+        _server
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
+            .RespondWith(Response.Create()
+                .WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody("""
+                {
+                    "transaction_id": "BNK-2024-001",
+                    "score": 20,
+                    "decision": "APPROVE"
+                }
+                """));
+
+        await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
+
+        // isDefaultReview = false pour un vrai succès FastAPI
+        _metricsCollectorMock.Verify(
+            m => m.RecordMlCall(false, It.IsAny<double>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ServerUnreachable_RecordsMetricWithFallbackOutcome()
+    {
+        _server.Stop();
+
+        await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
+
+        // isDefaultReview = true pour le fallback Polly (RiskScore.DefaultReview())
+        _metricsCollectorMock.Verify(
+            m => m.RecordMlCall(true, It.IsAny<double>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ServerReturns500_RecordsMetricWithFallbackOutcome()
+    {
+        _server
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(500));
+
+        await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
+
+        _metricsCollectorMock.Verify(
+            m => m.RecordMlCall(true, It.IsAny<double>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_RecordsPositiveDuration()
+    {
+        _server
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
+            .RespondWith(Response.Create()
+                .WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody("""{"transaction_id":"BNK-2024-001","score":20,"decision":"APPROVE"}"""));
+
+        await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
+
+        // La durée mesurée doit toujours être positive — vérifie que le
+        // Stopwatch mesure réellement quelque chose, pas juste 0 par défaut.
+        _metricsCollectorMock.Verify(
+            m => m.RecordMlCall(It.IsAny<bool>(), It.Is<double>(d => d >= 0)),
+            Times.Once);
     }
 }

@@ -103,4 +103,21 @@ public interface IOperatorWebhookAdapter
     /// la valeur réelle avant l'appel à FastAPI.
     /// </summary>
     Transaction Adapt(RawWebhookPayload payload);
+
+    /// <summary>
+    /// Vrai si cet adaptateur est un fallback générique (accepte n'importe
+    /// quel code opérateur), faux s'il est dédié à un opérateur précis.
+    ///
+    /// OperatorAdapterRegistry utilise ce signal pour toujours préférer un
+    /// adaptateur spécifique à un fallback quand les deux répondent CanHandle
+    /// = true pour le même code — évite qu'un futur BankilyWebhookAdapter
+    /// (vrai format) soit accidentellement court-circuité par un adaptateur
+    /// générique de test qui accepterait aussi "BANKILY".
+    ///
+    /// Valeur par défaut false — un adaptateur dédié n'a rien à faire pour
+    /// en bénéficier. Seul un adaptateur de type fallback (voir
+    /// GenericMobileMoneyWebhookAdapter) doit explicitement redéfinir
+    /// cette propriété à true.
+    /// </summary>
+    bool IsFallback => false;
 }

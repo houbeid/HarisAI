@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <UserSecretsId>fraud-backend-worker</UserSecretsId>
+    <RootNamespace>FraudDetection.Worker</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Serilog.Settings.Configuration" Version="8.0.4" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../FraudDetection.Domain/FraudDetection.Domain.csproj" />
+    <ProjectReference Include="../FraudDetection.Application/FraudDetection.Application.csproj" />
+    <ProjectReference Include="../FraudDetection.Infrastructure/FraudDetection.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

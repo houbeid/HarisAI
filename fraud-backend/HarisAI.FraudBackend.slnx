@@ -4,5 +4,6 @@
     <Project Path="src/FraudDetection.Domain/FraudDetection.Domain.csproj" />
     <Project Path="src/FraudDetection.Infrastructure/FraudDetection.Infrastructure.csproj" />
     <Project Path="src/FraudDetection.Tests/FraudDetection.Tests.csproj" />
+    <Project Path="src/FraudDetection.Worker/FraudDetection.Worker.csproj" />
   </Folder>
 </Solution>

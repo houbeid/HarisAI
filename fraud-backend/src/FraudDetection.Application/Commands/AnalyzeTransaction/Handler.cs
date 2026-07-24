@@ -1,4 +1,5 @@
 using FraudDetection.Application.Commands.CreateAlert;
+using FraudDetection.Application.Exceptions;
 using FraudDetection.Application.Interfaces;
 using FraudDetection.Domain.Entities;
 using MediatR;
@@ -30,7 +31,7 @@ namespace FraudDetection.Application.Commands.AnalyzeTransaction;
 public sealed class AnalyzeTransactionHandler
     : IRequestHandler<AnalyzeTransactionCommand, AnalyzeTransactionResult>
 {
-    private readonly IEnumerable<IOperatorWebhookAdapter> _adapters;
+    private readonly IOperatorAdapterRegistry _adapterRegistry;
     private readonly IMlScoringService _mlScoringService;
     private readonly ISimChangeService _simChangeService;
     private readonly ITransactionRepository _transactionRepository;
@@ -39,7 +40,7 @@ public sealed class AnalyzeTransactionHandler
     private readonly ILogger<AnalyzeTransactionHandler> _logger;
 
     public AnalyzeTransactionHandler(
-        IEnumerable<IOperatorWebhookAdapter> adapters,
+        IOperatorAdapterRegistry adapterRegistry,
         IMlScoringService mlScoringService,
         ISimChangeService simChangeService,
         ITransactionRepository transactionRepository,
@@ -47,7 +48,7 @@ public sealed class AnalyzeTransactionHandler
         IMediator mediator,
         ILogger<AnalyzeTransactionHandler> logger)
     {
-        _adapters = adapters;
+        _adapterRegistry = adapterRegistry;
         _mlScoringService = mlScoringService;
         _simChangeService = simChangeService;
         _transactionRepository = transactionRepository;
@@ -62,8 +63,10 @@ public sealed class AnalyzeTransactionHandler
     {
         var operatorCode = request.Payload.OperatorCode;
 
-        // ── Étape 1 : Sélectionner l'adaptateur ──────────────────────────────
-        var adapter = _adapters.FirstOrDefault(a => a.CanHandle(operatorCode));
+        // ── Étape 1 : Sélectionner l'adaptateur via le registre ───────────────
+        // Le registre applique la priorité spécifique > fallback — ce Handler
+        // n'a pas à connaître cette règle (voir IOperatorAdapterRegistry).
+        var adapter = _adapterRegistry.Resolve(operatorCode);
         if (adapter is null)
         {
             _logger.LogError(
@@ -71,9 +74,7 @@ public sealed class AnalyzeTransactionHandler
                 "Vérifier l'enregistrement DI dans Program.cs.",
                 operatorCode);
 
-            throw new InvalidOperationException(
-                $"Opérateur non supporté : {operatorCode}. " +
-                $"Ajouter un adaptateur IOperatorWebhookAdapter et l'enregistrer dans le DI.");
+            throw new OperatorNotConfiguredException(operatorCode);
         }
 
         // ── Étape 2 : Transformer le payload brut → Transaction ───────────────
@@ -136,7 +137,7 @@ public sealed class AnalyzeTransactionHandler
         // IMlScoringService ne lève jamais d'exception sur une panne FastAPI —
         // Polly retourne RiskScore.DefaultReview() (FraudType="UNAVAILABLE").
         var score = await _mlScoringService.AnalyzeAsync(
-            enrichedTransaction, cancellationToken);
+            enrichedTransaction, request.CorrelationId, cancellationToken);
 
         bool isDefaultReview = score.FraudType == "UNAVAILABLE";
 

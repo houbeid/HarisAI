@@ -1,5 +1,6 @@
 using FraudDetection.Application.Commands.AnalyzeTransaction;
 using FraudDetection.Application.Commands.CreateAlert;
+using FraudDetection.Application.Exceptions;
 using FraudDetection.Application.Interfaces;
 using FraudDetection.Domain.Entities;
 using FraudDetection.Domain.ValueObjects;
@@ -13,6 +14,7 @@ namespace FraudDetection.Tests.Application;
 public class AnalyzeTransactionHandlerTests
 {
     // ── Mocks ────────────────────────────────────────────────────────────────
+    private readonly Mock<IOperatorAdapterRegistry> _registryMock = new();
     private readonly Mock<IOperatorWebhookAdapter> _adapterMock = new();
     private readonly Mock<IMlScoringService> _mlServiceMock = new();
     private readonly Mock<ISimChangeService> _simChangeMock = new();
@@ -29,13 +31,15 @@ public class AnalyzeTransactionHandlerTests
         _validTransaction = ApplicationTestFixtures.BuildTransaction();
         _validPayload = ApplicationTestFixtures.BuildPayload();
 
-        // Adapter retourne toujours la transaction valide par défaut
-        _adapterMock
-            .Setup(a => a.CanHandle(ApplicationTestFixtures.ValidOperatorCode))
-            .Returns(true);
+        // L'adaptateur individuel — utilisé indirectement via le registre
         _adapterMock
             .Setup(a => a.Adapt(It.IsAny<RawWebhookPayload>()))
             .Returns(_validTransaction);
+
+        // Le registre résout systématiquement cet adaptateur pour le code opérateur valide
+        _registryMock
+            .Setup(r => r.Resolve(ApplicationTestFixtures.ValidOperatorCode))
+            .Returns(_adapterMock.Object);
 
         // SimChangeService retourne la transaction inchangée par défaut
         _simChangeMock
@@ -48,7 +52,7 @@ public class AnalyzeTransactionHandlerTests
             .ReturnsAsync((Transaction?)null);
 
         _handler = new AnalyzeTransactionHandler(
-            adapters: new[] { _adapterMock.Object },
+            adapterRegistry: _registryMock.Object,
             mlScoringService: _mlServiceMock.Object,
             simChangeService: _simChangeMock.Object,
             transactionRepository: _transactionRepoMock.Object,
@@ -69,7 +73,7 @@ public class AnalyzeTransactionHandlerTests
     {
         var approveScore = ApplicationTestFixtures.BuildApproveScore();
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(approveScore);
 
         var result = await _handler.Handle(BuildCommand(), CancellationToken.None);
@@ -83,7 +87,7 @@ public class AnalyzeTransactionHandlerTests
     public async Task Handle_ApproveDecision_DoesNotCreateAlert()
     {
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApplicationTestFixtures.BuildApproveScore());
 
         await _handler.Handle(BuildCommand(), CancellationToken.None);
@@ -99,7 +103,7 @@ public class AnalyzeTransactionHandlerTests
     {
         var reviewScore = ApplicationTestFixtures.BuildReviewScore();
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(reviewScore);
         _mediatorMock
             .Setup(m => m.Send(It.IsAny<CreateAlertCommand>(), It.IsAny<CancellationToken>()))
@@ -122,7 +126,7 @@ public class AnalyzeTransactionHandlerTests
     {
         var blockScore = ApplicationTestFixtures.BuildBlockScore();
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(blockScore);
         _mediatorMock
             .Setup(m => m.Send(It.IsAny<CreateAlertCommand>(), It.IsAny<CancellationToken>()))
@@ -148,7 +152,7 @@ public class AnalyzeTransactionHandlerTests
             .Returns(Task.CompletedTask);
 
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Callback(() => saveOrder.Add("ml"))
             .ReturnsAsync(ApplicationTestFixtures.BuildApproveScore());
 
@@ -164,7 +168,7 @@ public class AnalyzeTransactionHandlerTests
     {
         // Polly retourne DefaultReview quand FastAPI est indisponible
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(RiskScore.DefaultReview());
 
         var result = await _handler.Handle(BuildCommand(), CancellationToken.None);
@@ -178,7 +182,7 @@ public class AnalyzeTransactionHandlerTests
     {
         // Quand FastAPI est down, la transaction doit être mise en file de rescoring
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(RiskScore.DefaultReview());
 
         await _handler.Handle(BuildCommand(), CancellationToken.None);
@@ -193,7 +197,7 @@ public class AnalyzeTransactionHandlerTests
     {
         // Quand FastAPI répond normalement, pas d'enqueue
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApplicationTestFixtures.BuildApproveScore());
 
         await _handler.Handle(BuildCommand(), CancellationToken.None);
@@ -216,7 +220,7 @@ public class AnalyzeTransactionHandlerTests
             .ReturnsAsync(_validTransaction);
 
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApplicationTestFixtures.BuildApproveScore());
 
         await _handler.Handle(BuildCommand(), CancellationToken.None);
@@ -230,23 +234,25 @@ public class AnalyzeTransactionHandlerTests
     // ── Tests de validation métier ────────────────────────────────────────────
 
     [Fact]
-    public async Task Handle_UnknownOperator_ThrowsInvalidOperationException()
+    public async Task Handle_UnknownOperator_ThrowsOperatorNotConfiguredException()
     {
         var unknownPayload = ApplicationTestFixtures.BuildPayload(operatorCode: "UNKNOWN_OP");
         var command = new AnalyzeTransactionCommand(
             payload: unknownPayload,
             correlationId: ApplicationTestFixtures.ValidCorrelationId);
 
-        // Aucun adaptateur ne gère "UNKNOWN_OP"
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        // Le registre ne connaît pas "UNKNOWN_OP" — Resolve() retourne null par défaut (Moq)
+        var exception = await Assert.ThrowsAsync<OperatorNotConfiguredException>(
             () => _handler.Handle(command, CancellationToken.None));
+
+        Assert.Equal("UNKNOWN_OP", exception.OperatorCode);
     }
 
     [Fact]
     public async Task Handle_SimChangeServiceCalled_WithAdaptedTransaction()
     {
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(It.IsAny<Transaction>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApplicationTestFixtures.BuildApproveScore());
 
         await _handler.Handle(BuildCommand(), CancellationToken.None);
@@ -270,14 +276,14 @@ public class AnalyzeTransactionHandlerTests
             .ReturnsAsync(enrichedTransaction);
 
         _mlServiceMock
-            .Setup(m => m.AnalyzeAsync(enrichedTransaction, It.IsAny<CancellationToken>()))
+            .Setup(m => m.AnalyzeAsync(enrichedTransaction, It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApplicationTestFixtures.BuildApproveScore());
 
         await _handler.Handle(BuildCommand(), CancellationToken.None);
 
         // FastAPI reçoit la transaction enrichie, pas l'originale
         _mlServiceMock.Verify(
-            m => m.AnalyzeAsync(enrichedTransaction, It.IsAny<CancellationToken>()),
+            m => m.AnalyzeAsync(enrichedTransaction, It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 }

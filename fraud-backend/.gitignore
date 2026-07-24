@@ -1,0 +1,23 @@
+## Build artifacts
+bin/
+obj/
+
+## User-specific files
+*.user
+*.suo
+.vs/
+
+## Secrets locaux — appsettings.Development.json contient des valeurs
+## factices "dev-only" volontairement non sensibles (voir le fichier),
+## donc il PEUT etre commite tel quel. Mais toute variante locale
+## personnalisee avec de vraies valeurs ne doit jamais l'etre :
+appsettings.Local.json
+appsettings.*.local.json
+*.secrets.json
+
+## Resultats de tests
+TestResults/
+
+## macOS / Windows
+.DS_Store
+Thumbs.db

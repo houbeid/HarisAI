@@ -31,6 +31,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<TransactionRecord> Transactions => Set<TransactionRecord>();
     public DbSet<AlertRecord> Alerts => Set<AlertRecord>();
     public DbSet<PendingTransactionRecord> PendingTransactions => Set<PendingTransactionRecord>();
+    public DbSet<StrReportRecord> StrReports => Set<StrReportRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

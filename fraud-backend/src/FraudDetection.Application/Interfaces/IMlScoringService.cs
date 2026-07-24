@@ -24,9 +24,14 @@ public interface IMlScoringService
     /// dans ce cas, MlScoringService retourne RiskScore.DefaultReview() via Polly fallback.
     /// Ne lève jamais d'exception sur une panne FastAPI — la résilience est encapsulée
     /// dans l'implémentation Infrastructure, pas dans les handlers Application.
+    ///
+    /// correlationId est propagé en header HTTP vers FastAPI (X-Correlation-Id) —
+    /// permet de tracer une transaction de bout en bout entre .NET et Python,
+    /// comble le manque documenté côté Python (doc technique, section 10.2).
     /// </summary>
     Task<RiskScore> AnalyzeAsync(
         Transaction transaction,
+        string correlationId,
         CancellationToken cancellationToken = default);
 
     /// <summary>

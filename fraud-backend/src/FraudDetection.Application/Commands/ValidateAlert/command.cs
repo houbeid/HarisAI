@@ -1,4 +1,5 @@
 using FraudDetection.Application.Commands.GenerateStrReport;
+using FraudDetection.Application.Exceptions;
 using FraudDetection.Application.Interfaces;
 using MediatR;
 using Microsoft.Extensions.Logging;
@@ -119,28 +120,42 @@ public sealed class ValidateAlertHandler
                 request.AlertId,
                 request.ReviewedBy);
 
-            throw new InvalidOperationException(
-                $"Alerte {request.AlertId} introuvable. " +
-                $"Elle a peut-être été supprimée ou l'AlertId est incorrect.");
+            throw new AlertNotFoundException(request.AlertId);
         }
 
         // ── Appliquer la décision de l'agent ─────────────────────────────────
         // Alert.Confirm() et Alert.Dismiss() lèvent InvalidOperationException
-        // si l'alerte n'est plus Pending — règle métier du domaine.
-        switch (request.Action)
+        // si l'alerte n'est plus Pending — règle métier du domaine, seule
+        // source de vérité. Ce Handler traduit cet échec en
+        // AlertAlreadyProcessedException, un type exploitable par l'API
+        // (mappé vers 409 Conflict par GlobalExceptionMiddleware) sans
+        // dupliquer la règle elle-même.
+        try
         {
-            case AlertValidationAction.Confirm:
-                alert.Confirm(request.ReviewedBy, request.Note);
-                break;
+            switch (request.Action)
+            {
+                case AlertValidationAction.Confirm:
+                    alert.Confirm(request.ReviewedBy, request.Note);
+                    break;
 
-            case AlertValidationAction.Dismiss:
-                alert.Dismiss(request.ReviewedBy, request.Note);
-                break;
+                case AlertValidationAction.Dismiss:
+                    alert.Dismiss(request.ReviewedBy, request.Note);
+                    break;
 
-            default:
-                throw new ArgumentOutOfRangeException(
-                    nameof(request.Action),
-                    $"Action non supportée : {request.Action}");
+                default:
+                    throw new ArgumentOutOfRangeException(
+                        nameof(request.Action),
+                        $"Action non supportée : {request.Action}");
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(
+                "Alerte déjà traitée — AlertId={AlertId} Status={Status} " +
+                "TentativeReviewedBy={ReviewedBy}",
+                alert.AlertId, alert.Status, request.ReviewedBy);
+
+            throw new AlertAlreadyProcessedException(request.AlertId, ex);
         }
 
         // ── Persister le changement de statut ─────────────────────────────────
