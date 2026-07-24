@@ -1,11 +1,48 @@
-## Build artifacts
+## Build artifacts .NET
 bin/
 obj/
+publish/
+out/
 
-## User-specific files
+## Fichiers spécifiques à un poste de développement
 *.user
 *.suo
+*.userosscache
+*.sln.docstates
+
+## IDE — Visual Studio / Rider / VS Code
 .vs/
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+
+## NuGet — packages restaurés localement, jamais committés
+## (le cache global NuGet vit hors du repo ; PackageReference n'a pas
+## besoin d'un dossier packages/ versionné, contrairement à packages.config)
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+
+## Résultats de build / publication
+*.dll
+*.pdb
+*.cache
+
+## ⚠ Migrations/ N'EST PAS ignoré — les fichiers de migration EF Core
+## (InitialCreate.cs, .Designer.cs, ModelSnapshot.cs) DOIVENT être
+## committés : c'est le schéma de base versionné, nécessaire à tout
+## déploiement. Ils ne sont de toute façon jamais visés par les règles
+## ci-dessus (ce sont des .cs, pas des .dll/.pdb) — note laissée ici
+## explicitement pour qu'aucune future règle ne les exclue par erreur.
+
+## Tests
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
 
 ## Secrets locaux — appsettings.Development.json contient des valeurs
 ## factices "dev-only" volontairement non sensibles (voir le fichier),
@@ -14,10 +51,25 @@ obj/
 appsettings.Local.json
 appsettings.*.local.json
 *.secrets.json
+.env
+.env.*
+!.env.example
 
-## Resultats de tests
-TestResults/
+## Logs générés localement (ex: lors de dotnet run, de tests manuels)
+*.log
+server.log
+
+## Environnements Python accidentellement créés dans ce repo .NET
+## (le vrai fraud-ml-service est un repo séparé — au cas où un venv/myenv
+## serait créé ici par erreur pendant un test)
+venv/
+myenv/
+__pycache__/
+
+## Crash dumps
+*.dmp
 
 ## macOS / Windows
 .DS_Store
 Thumbs.db
+desktop.ini
