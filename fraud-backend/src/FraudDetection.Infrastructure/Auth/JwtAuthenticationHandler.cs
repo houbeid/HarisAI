@@ -40,6 +40,12 @@ public static class JwtAuthenticationHandler
 
         return builder.AddJwtBearer(SchemeName, jwtOptions =>
         {
+            // Sans ceci, .NET remappe automatiquement les claims JWT standards
+            // (ex: "sub" → un URI interne ClaimTypes.NameIdentifier) avant qu'ils
+            // n'atteignent le code applicatif. AlertController lit User.FindFirst("sub")
+            // littéralement — sans cette ligne, cette lecture retournerait toujours null.
+            jwtOptions.MapInboundClaims = false;
+
             jwtOptions.TokenValidationParameters = new TokenValidationParameters
             {
                 ValidateIssuer = true,

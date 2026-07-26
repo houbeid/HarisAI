@@ -140,7 +140,14 @@ builder.Services.AddHealthChecks()
     // rotation du Service (readiness). Voir FraudMlServiceHealthCheck.
     .AddCheck<FraudMlServiceHealthCheck>("fraud-ml-service", tags: new[] { "ready" });
 
-builder.Services.AddControllers();
+// JsonStringEnumConverter — sans lui, un enum C# (ex: AlertValidationAction dans
+// ValidateAlertRequest) est désérialisé par défaut comme un NOMBRE (0/1), pas
+// comme une chaîne. Le frontend envoie {"action":"Confirm"} — sans ce convertisseur,
+// cette requête échoue silencieusement à se lier au modèle.
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter()));
 
 // ═══════════════════════════════════════════════════════════════════════
 // POLITIQUES POLLY — retry + circuit breaker vers fraud-ml-service

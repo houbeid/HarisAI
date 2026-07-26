@@ -28,6 +28,7 @@
     <ProjectReference Include="../FraudDetection.Application/FraudDetection.Application.csproj" />
     <ProjectReference Include="../FraudDetection.Infrastructure/FraudDetection.Infrastructure.csproj" />
     <ProjectReference Include="../FraudDetection.Worker/FraudDetection.Worker.csproj" />
+    <ProjectReference Include="../FraudDetection.API/FraudDetection.API.csproj" />
   </ItemGroup>
 
 </Project>
