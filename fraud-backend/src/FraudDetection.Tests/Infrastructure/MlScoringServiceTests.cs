@@ -3,7 +3,7 @@ using FraudDetection.Domain.Enums;
 using FraudDetection.Domain.ValueObjects;
 using FraudDetection.Infrastructure.ExternalServices;
 using FraudDetection.Infrastructure.Observability;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Moq;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -27,6 +27,12 @@ public sealed class MlScoringServiceTests : IDisposable
     private readonly WireMockServer _server;
     private readonly HttpClient _httpClient;
     private readonly Mock<IMetricsCollector> _metricsCollectorMock;
+
+    // Mock<ILogger> plutôt que NullLogger — permet de vérifier concrètement
+    // que le corps d'une réponse d'erreur est bien loggé (voir test dédié
+    // plus bas), découvert nécessaire lors du premier test d'intégration
+    // réel contre le vrai fraud-ml-service.
+    private readonly Mock<ILogger<MlScoringService>> _loggerMock;
     private readonly MlScoringService _service;
 
     public MlScoringServiceTests()
@@ -34,8 +40,9 @@ public sealed class MlScoringServiceTests : IDisposable
         _server = WireMockServer.Start();
         _httpClient = new HttpClient { BaseAddress = new Uri(_server.Url!) };
         _metricsCollectorMock = new Mock<IMetricsCollector>();
+        _loggerMock = new Mock<ILogger<MlScoringService>>();
         _service = new MlScoringService(
-            _httpClient, _metricsCollectorMock.Object, NullLogger<MlScoringService>.Instance);
+            _httpClient, _metricsCollectorMock.Object, _loggerMock.Object);
     }
 
 
@@ -327,5 +334,58 @@ public sealed class MlScoringServiceTests : IDisposable
         _metricsCollectorMock.Verify(
             m => m.RecordMlCall(It.IsAny<bool>(), It.Is<double>(d => d >= 0)),
             Times.Once);
+    }
+
+    // ── Logging du corps d'erreur — découvert nécessaire lors du premier ────
+    // ── test d'intégration réel contre fraud-ml-service (422 Pydantic) ──────
+
+    [Fact]
+    public async Task AnalyzeAsync_ServerReturns422_LogsResponseBody()
+    {
+        // Reproduit un vrai rejet de validation Pydantic FastAPI — le corps
+        // contient le détail exact du champ invalide, indispensable pour
+        // diagnostiquer une divergence de contrat entre .NET et FastAPI.
+        const string pydanticErrorBody =
+            """{"detail":[{"loc":["body","currency"],"msg":"field required","type":"value_error.missing"}]}""";
+
+        _server
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
+            .RespondWith(Response.Create()
+                .WithStatusCode(422)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody(pydanticErrorBody));
+
+        await _service.AnalyzeAsync(BuildTransaction(), "test-correlation-id", CancellationToken.None);
+
+        // Vérifie qu'un LogError a bien été émis — sans exiger une
+        // correspondance exacte du message complet (fragile), on vérifie
+        // que le niveau est Error et que l'appel a bien eu lieu une fois.
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ServerReturns422_StillFallsBackToDefaultReview()
+    {
+        // Le logging amélioré ne doit jamais changer le comportement de
+        // fallback déjà établi — un 422 reste traité comme n'importe quel
+        // échec HTTP, REVIEW par défaut, jamais une exception qui remonte.
+        _server
+            .Given(Request.Create().WithPath("/api/v1/analyze").UsingPost())
+            .RespondWith(Response.Create()
+                .WithStatusCode(422)
+                .WithBody("""{"detail":"invalid payload"}"""));
+
+        var result = await _service.AnalyzeAsync(
+            BuildTransaction(), "test-correlation-id", CancellationToken.None);
+
+        Assert.Equal("UNAVAILABLE", result.FraudType);
+        Assert.Equal(DecisionStatus.Review, result.Decision);
     }
 }

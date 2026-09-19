@@ -183,7 +183,8 @@ public sealed class AnalyzeTransactionHandler
                     alertId: score.AlertId,
                     transactionId: transaction.TransactionId,
                     operatorCode: transaction.Operator,
-                    score: score),
+                    score: score,
+                    amount: enrichedTransaction.Amount),
                 cancellationToken);
         }
 

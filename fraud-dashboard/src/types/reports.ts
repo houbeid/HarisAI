@@ -39,6 +39,10 @@ export interface ReportsResponse {
   reports: StrReportItem[];
   page: number;
   pageSize: number;
+  // Comble le point ouvert 5 (Session 2) : total réel indépendant de la
+  // pagination — remplace l'heuristique "Suivant désactivé si la page est
+  // incomplète" de la Session 1 par une vraie pagination.
+  totalCount: number;
 }
 
 export interface GetReportsParams {

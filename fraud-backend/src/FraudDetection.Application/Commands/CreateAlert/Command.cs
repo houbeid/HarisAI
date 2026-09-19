@@ -24,11 +24,19 @@ public sealed record CreateAlertCommand : IRequest<CreateAlertResult>
     public string OperatorCode { get; }
     public RiskScore Score { get; }
 
+    /// <summary>
+    /// Montant de la transaction ayant déclenché l'alerte — copié depuis
+    /// Transaction.Amount par l'appelant (AnalyzeTransactionHandler ou
+    /// PendingTransactionWorker). Voir Alert.Amount (Domain).
+    /// </summary>
+    public Money Amount { get; }
+
     public CreateAlertCommand(
         string alertId,
         string transactionId,
         string operatorCode,
-        RiskScore score)
+        RiskScore score,
+        Money amount)
     {
         if (string.IsNullOrWhiteSpace(alertId))
             throw new ArgumentException("AlertId ne peut pas être vide.", nameof(alertId));
@@ -40,6 +48,7 @@ public sealed record CreateAlertCommand : IRequest<CreateAlertResult>
             throw new ArgumentException("OperatorCode ne peut pas être vide.", nameof(operatorCode));
 
         ArgumentNullException.ThrowIfNull(score);
+        ArgumentNullException.ThrowIfNull(amount);
 
         // Guard : cette commande ne doit jamais être créée pour APPROVE
         if (!score.RequiresHumanReview)
@@ -52,6 +61,7 @@ public sealed record CreateAlertCommand : IRequest<CreateAlertResult>
         TransactionId = transactionId.Trim();
         OperatorCode = operatorCode.Trim().ToUpperInvariant();
         Score = score;
+        Amount = amount;
     }
 }
 
@@ -120,6 +130,7 @@ public sealed class CreateAlertHandler
             transactionId: request.TransactionId,
             @operator: request.OperatorCode,
             score: request.Score,
+            amount: request.Amount,
             createdAt: DateTime.UtcNow);
 
         await _alertRepository.SaveAsync(alert, cancellationToken);

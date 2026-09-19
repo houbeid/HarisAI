@@ -394,7 +394,7 @@ def main(args):
 
     if len(args.datasets) == 1:
         name, path = args.datasets[0].split(":", 1)
-        if name in ("ibm_aml", "ibm_aml_full"):
+        if name in ("ibm_aml", "ibm_aml_full", "pysim", "pysim_full"):
             if not Path(path).exists():
                 raise FileNotFoundError(f"Fichier introuvable : {path}")
             loader = REGISTRY[name]
@@ -513,7 +513,10 @@ def main(args):
         X_direct = np.empty((n_rows, len(TFT_FEATURE_NAMES)), dtype=np.float32)
         for i, name in enumerate(TFT_FEATURE_NAMES):
             if name in AML_FEATURE_NAMES_TRAINABLE:
-                X_direct[:, i] = aml_features[name]
+                if aml_features is not None and name in aml_features:
+                    X_direct[:, i] = aml_features[name]
+                else:
+                    X_direct[:, i] = 0.0  # PaySim/Aryan : feature AML neutre
             else:
                 X_direct[:, i] = X[:, FEATURE_NAMES.index(name)]
         X = X_direct

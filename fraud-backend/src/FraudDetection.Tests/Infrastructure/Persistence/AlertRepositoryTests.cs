@@ -34,12 +34,14 @@ public sealed class AlertRepositoryTests : IAsyncLifetime
         RiskScore? score = null,
         string alertId = "ALT-C15FDD6C8FCB",
         string transactionId = "BNK-2024-001",
-        string @operator = "BANKILY") =>
+        string @operator = "BANKILY",
+        decimal amount = 47000m) =>
         new(
             alertId: alertId,
             transactionId: transactionId,
             @operator: @operator,
             score: score ?? BuildReviewScore(),
+            amount: new Money(amount, "MRU"),
             createdAt: DateTime.UtcNow);
 
     // ── Save / GetByAlertId ──────────────────────────────────────────────────
@@ -168,9 +170,9 @@ public sealed class AlertRepositoryTests : IAsyncLifetime
         await _repository.UpdateAsync(confirmedAlert, CancellationToken.None);
 
         var pendingResults = await _repository.GetByStatusAsync(
-            AlertStatus.Pending, cancellationToken: CancellationToken.None);
+            new[] { AlertStatus.Pending }, cancellationToken: CancellationToken.None);
         var confirmedResults = await _repository.GetByStatusAsync(
-            AlertStatus.Confirmed, cancellationToken: CancellationToken.None);
+            new[] { AlertStatus.Confirmed }, cancellationToken: CancellationToken.None);
 
         Assert.Single(pendingResults);
         Assert.Equal("ALT-PENDING-001", pendingResults[0].AlertId);
@@ -191,7 +193,7 @@ public sealed class AlertRepositoryTests : IAsyncLifetime
         await _repository.SaveAsync(sedadAlert, CancellationToken.None);
 
         var bankilyResults = await _repository.GetByStatusAsync(
-            AlertStatus.Pending, operatorCode: "BANKILY", cancellationToken: CancellationToken.None);
+            new[] { AlertStatus.Pending }, operatorCode: "BANKILY", cancellationToken: CancellationToken.None);
 
         Assert.Single(bankilyResults);
         Assert.Equal("BANKILY", bankilyResults[0].Operator);
@@ -208,7 +210,7 @@ public sealed class AlertRepositoryTests : IAsyncLifetime
         await _repository.SaveAsync(newer, CancellationToken.None);
 
         var results = await _repository.GetByStatusAsync(
-            AlertStatus.Pending, cancellationToken: CancellationToken.None);
+            new[] { AlertStatus.Pending }, cancellationToken: CancellationToken.None);
 
         Assert.Equal(2, results.Count);
         Assert.Equal("ALT-NEW", results[0].AlertId); // le plus récent en premier
@@ -225,9 +227,9 @@ public sealed class AlertRepositoryTests : IAsyncLifetime
         }
 
         var page1 = await _repository.GetByStatusAsync(
-            AlertStatus.Pending, page: 1, pageSize: 2, cancellationToken: CancellationToken.None);
+            new[] { AlertStatus.Pending }, page: 1, pageSize: 2, cancellationToken: CancellationToken.None);
         var page2 = await _repository.GetByStatusAsync(
-            AlertStatus.Pending, page: 2, pageSize: 2, cancellationToken: CancellationToken.None);
+            new[] { AlertStatus.Pending }, page: 2, pageSize: 2, cancellationToken: CancellationToken.None);
 
         Assert.Equal(2, page1.Count);
         Assert.Equal(2, page2.Count);
@@ -255,5 +257,100 @@ public sealed class AlertRepositoryTests : IAsyncLifetime
         var count = await _repository.CountPendingAsync("BANKILY", CancellationToken.None);
 
         Assert.Equal(2, count); // seulement les 2 Pending, pas le Confirmed
+    }
+
+    // ── GetByStatusAsync — nouveau comportement multi-statuts ───────────────────
+
+    [Fact]
+    public async Task GetByStatusAsync_MultipleStatuses_ReturnsCombinedResults()
+    {
+        // Le filtre "Traitées" du dashboard combine Confirmed + Dismissed
+        // en un seul appel — comportement réclamé par la session frontend.
+        var pendingAlert = BuildAlert(alertId: "ALT-PENDING", transactionId: "BNK-P");
+        var confirmedAlert = BuildAlert(alertId: "ALT-CONFIRMED", transactionId: "BNK-C");
+        var dismissedAlert = BuildAlert(alertId: "ALT-DISMISSED", transactionId: "BNK-D");
+
+        await _repository.SaveAsync(pendingAlert, CancellationToken.None);
+        await _repository.SaveAsync(confirmedAlert, CancellationToken.None);
+        await _repository.SaveAsync(dismissedAlert, CancellationToken.None);
+
+        confirmedAlert.Confirm("agent@bankily.mr");
+        await _repository.UpdateAsync(confirmedAlert, CancellationToken.None);
+        dismissedAlert.Dismiss("agent@bankily.mr");
+        await _repository.UpdateAsync(dismissedAlert, CancellationToken.None);
+
+        var traitees = await _repository.GetByStatusAsync(
+            new[] { AlertStatus.Confirmed, AlertStatus.Dismissed },
+            cancellationToken: CancellationToken.None);
+
+        Assert.Equal(2, traitees.Count);
+        Assert.DoesNotContain(traitees, a => a.AlertId == "ALT-PENDING");
+        Assert.Contains(traitees, a => a.AlertId == "ALT-CONFIRMED");
+        Assert.Contains(traitees, a => a.AlertId == "ALT-DISMISSED");
+    }
+
+    [Fact]
+    public async Task GetByStatusAsync_NullOrEmptyStatuses_ReturnsAllStatuses()
+    {
+        var pendingAlert = BuildAlert(alertId: "ALT-P", transactionId: "BNK-P");
+        var confirmedAlert = BuildAlert(alertId: "ALT-C", transactionId: "BNK-C");
+
+        await _repository.SaveAsync(pendingAlert, CancellationToken.None);
+        await _repository.SaveAsync(confirmedAlert, CancellationToken.None);
+        confirmedAlert.Confirm("agent@bankily.mr");
+        await _repository.UpdateAsync(confirmedAlert, CancellationToken.None);
+
+        var all = await _repository.GetByStatusAsync(
+            statuses: null, cancellationToken: CancellationToken.None);
+
+        Assert.Equal(2, all.Count);
+    }
+
+    // ── CountByStatusesAsync ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CountByStatusesAsync_MultipleStatuses_CountsCombined()
+    {
+        var confirmedAlert = BuildAlert(alertId: "ALT-C", transactionId: "BNK-C");
+        var dismissedAlert = BuildAlert(alertId: "ALT-D", transactionId: "BNK-D");
+        var pendingAlert = BuildAlert(alertId: "ALT-P", transactionId: "BNK-P");
+
+        await _repository.SaveAsync(confirmedAlert, CancellationToken.None);
+        await _repository.SaveAsync(dismissedAlert, CancellationToken.None);
+        await _repository.SaveAsync(pendingAlert, CancellationToken.None);
+
+        confirmedAlert.Confirm("agent@bankily.mr");
+        await _repository.UpdateAsync(confirmedAlert, CancellationToken.None);
+        dismissedAlert.Dismiss("agent@bankily.mr");
+        await _repository.UpdateAsync(dismissedAlert, CancellationToken.None);
+
+        var count = await _repository.CountByStatusesAsync(
+            new[] { AlertStatus.Confirmed, AlertStatus.Dismissed },
+            cancellationToken: CancellationToken.None);
+
+        Assert.Equal(2, count); // pas le Pending
+    }
+
+    [Fact]
+    public async Task CountByStatusesAsync_FiltersByOperator()
+    {
+        var bankilyConfirmed = BuildAlert(
+            alertId: "ALT-BNK", transactionId: "BNK-001", @operator: "BANKILY");
+        var sedadConfirmed = BuildAlert(
+            alertId: "ALT-SED", transactionId: "SED-001", @operator: "SEDAD");
+
+        await _repository.SaveAsync(bankilyConfirmed, CancellationToken.None);
+        await _repository.SaveAsync(sedadConfirmed, CancellationToken.None);
+        bankilyConfirmed.Confirm("agent@bankily.mr");
+        await _repository.UpdateAsync(bankilyConfirmed, CancellationToken.None);
+        sedadConfirmed.Confirm("agent@sedad.mr");
+        await _repository.UpdateAsync(sedadConfirmed, CancellationToken.None);
+
+        var count = await _repository.CountByStatusesAsync(
+            new[] { AlertStatus.Confirmed },
+            operatorCode: "BANKILY",
+            cancellationToken: CancellationToken.None);
+
+        Assert.Equal(1, count);
     }
 }

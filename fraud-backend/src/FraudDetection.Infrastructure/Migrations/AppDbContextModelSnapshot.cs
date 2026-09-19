@@ -36,6 +36,11 @@ namespace FraudDetection.Infrastructure.Migrations
                         .HasColumnType("character varying(50)")
                         .HasColumnName("alert_id");
 
+                    b.Property<decimal>("AmountValue")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("amount_value");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");

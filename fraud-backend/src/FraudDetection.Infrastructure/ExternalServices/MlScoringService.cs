@@ -75,6 +75,25 @@ public sealed class MlScoringService : IMlScoringService
 
             using var response = await _httpClient.SendAsync(request, cancellationToken);
 
+            if (!response.IsSuccessStatusCode)
+            {
+                // Lit le corps AVANT de lever l'exception — un 422 Pydantic
+                // contient le détail exact du champ invalide, indispensable
+                // pour diagnostiquer une divergence de contrat entre .NET et
+                // FastAPI (ex: un champ manquant dans TransactionInDto).
+                // EnsureSuccessStatusCode() seul ne loggait que le code HTTP,
+                // jamais ce détail — découvert lors du premier test
+                // d'intégration réel contre le vrai fraud-ml-service.
+                var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+
+                _logger.LogError(
+                    "fraud-ml-service a retourné {StatusCode} pour TransactionId={TransactionId} " +
+                    "— corps de la réponse : {ErrorBody}",
+                    (int)response.StatusCode,
+                    transaction.TransactionId,
+                    errorBody);
+            }
+
             response.EnsureSuccessStatusCode();
 
             var responseDto = await response.Content.ReadFromJsonAsync<ScoreOutDto>(

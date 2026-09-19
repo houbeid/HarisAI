@@ -38,15 +38,31 @@ public interface IAlertRepository
     Task<Alert?> GetByTransactionIdAsync(string transactionId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Récupère les alertes par statut et opérateur, triées par date de création décroissante.
-    /// Utilisé par GetAlertsHandler pour alimenter fraud-dashboard (agents de conformité).
+    /// Récupère les alertes correspondant à un ou plusieurs statuts, triées par
+    /// date de création décroissante. Utilisé par GetAlertsHandler pour alimenter
+    /// fraud-dashboard (agents de conformité).
+    ///
+    /// PLUSIEURS STATUTS EN UN SEUL APPEL — permet un filtre "Traitées" combinant
+    /// Confirmed ET Dismissed sans devoir faire deux requêtes séparées côté
+    /// dashboard puis fusionner côté client. statuses vide ou null = tous les statuts.
     /// operatorCode null = toutes les alertes du site (cas superviseur).
     /// </summary>
     Task<IReadOnlyList<Alert>> GetByStatusAsync(
-        AlertStatus status,
+        IReadOnlyCollection<AlertStatus>? statuses,
         string? operatorCode = null,
         int page = 1,
         int pageSize = 50,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Compte les alertes correspondant à un ou plusieurs statuts, sans pagination.
+    /// Utilisé pour exposer un total exploitable côté dashboard (ex: badge
+    /// "X alertes traitées"), là où CountPendingAsync ne couvrait que Pending.
+    /// statuses vide ou null = tous les statuts.
+    /// </summary>
+    Task<int> CountByStatusesAsync(
+        IReadOnlyCollection<AlertStatus>? statuses,
+        string? operatorCode = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

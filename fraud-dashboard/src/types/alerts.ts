@@ -44,6 +44,7 @@ export interface AlertListItem {
   alertId: string;
   transactionId: string;
   operator: string;
+  amount: number; // MRU, nombre décimal simple — point ouvert 3 comblé (Session 2)
   decision: DecisionRaw;
   score: number;
   fraudType: FraudType;
@@ -56,12 +57,24 @@ export interface AlertListItem {
 export interface AlertsResponse {
   alerts: AlertListItem[];
   totalPending: number;
+  // totalProcessed comble le point ouvert 2 (Session 2) : compteur global
+  // du site (Confirmed + Dismissed), indépendant du filtre status demandé
+  // et de la pagination — ne plus dériver ce nombre du nombre de lignes
+  // reçues comme dans la Session 1.
+  totalProcessed: number;
   page: number;
   pageSize: number;
 }
 
+// -----------------------------------------------------------------------
+// status est maintenant un TABLEAU (point ouvert 1 comblé, Session 2) —
+// liaison de tableau standard ASP.NET Core, paramètre répétable
+// (?status=Confirmed&status=Dismissed). Omis -> défaut backend = Pending
+// (comportement historique préservé). alertsApi.getAlerts() doit donc
+// sérialiser plusieurs valeurs status, pas une seule — voir httpClient.ts.
+// -----------------------------------------------------------------------
 export interface GetAlertsParams {
-  status?: AlertStatus;
+  status?: AlertStatus[];
   page?: number;
   pageSize?: number;
 }
@@ -92,8 +105,9 @@ export interface ValidateAlertResponse {
 // 500. `details` est une liste de chaînes non structurées : le backend ne
 // renvoie PAS qui a traité l'alerte ni quand dans le corps de l'erreur.
 // Toute info affichée au-delà de `error`/`details` (ex: "confirmée par
-// Aïcha M.") doit venir d'un second appel à GET /alerts après le 409,
-// jamais être supposée présente dans la réponse d'erreur elle-même.
+// Aïcha M.") doit venir d'un appel à GET /alerts/{alertId} après le 409
+// (point ouvert 4 comblé, Session 2) — plus besoin de rechercher dans une
+// liste rechargée et espérer que l'alerte soit dans la fenêtre récupérée.
 // -----------------------------------------------------------------------
 export type ApiErrorCode =
   | 'alert_not_found' // 404

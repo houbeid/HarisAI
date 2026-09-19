@@ -19,6 +19,16 @@ public sealed class Alert
     public string TransactionId { get; }
     public string Operator { get; }
     public RiskScore Score { get; }
+
+    /// <summary>
+    /// Montant de la transaction ayant déclenché cette alerte — copié depuis
+    /// Transaction.Amount au moment de la création (voir CreateAlertHandler).
+    /// Ajouté après coup (le montant n'existait pas dans les premières
+    /// versions d'Alert) — réclamé par la session frontend, absent de la
+    /// maquette du dashboard sans lui.
+    /// </summary>
+    public Money Amount { get; }
+
     public AlertStatus Status { get; private set; }
     public DateTime CreatedAt { get; }
     public DateTime? ReviewedAt { get; private set; }
@@ -30,6 +40,7 @@ public sealed class Alert
         string transactionId,
         string @operator,
         RiskScore score,
+        Money amount,
         DateTime createdAt)
     {
         if (string.IsNullOrWhiteSpace(alertId))
@@ -53,6 +64,7 @@ public sealed class Alert
         TransactionId = transactionId.Trim();
         Operator = @operator.Trim().ToUpperInvariant();
         Score = score;
+        Amount = amount;
         Status = AlertStatus.Pending;
         CreatedAt = createdAt;
     }

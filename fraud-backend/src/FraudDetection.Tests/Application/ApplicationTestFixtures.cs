@@ -69,11 +69,13 @@ internal static class ApplicationTestFixtures
     public static Alert BuildAlert(
         RiskScore? score = null,
         string alertId = ValidAlertId,
-        string transactionId = ValidTransactionId) =>
+        string transactionId = ValidTransactionId,
+        decimal amount = 47000m) =>
         new(
             alertId: alertId,
             transactionId: transactionId,
             @operator: ValidOperatorCode,
             score: score ?? BuildReviewScore(),
+            amount: new Money(amount, "MRU"),
             createdAt: DateTime.UtcNow);
 }

@@ -1,4 +1,5 @@
 using FraudDetection.Application.Commands.ValidateAlert;
+using FraudDetection.Application.Queries.GetAlertById;
 using FraudDetection.Application.Queries.GetAlerts;
 using FraudDetection.Domain.Enums;
 using MediatR;
@@ -53,13 +54,18 @@ public sealed class AlertController : ControllerBase
     }
 
     /// <summary>
-    /// Liste les alertes du site, filtrées par statut (Pending par défaut),
-    /// avec pagination. L'opérateur est toujours celui configuré pour ce
-    /// déploiement — jamais un choix laissé au client.
+    /// Liste les alertes du site, avec pagination. L'opérateur est toujours
+    /// celui configuré pour ce déploiement — jamais un choix laissé au client.
+    ///
+    /// FILTRE MULTI-STATUTS : le paramètre "status" accepte plusieurs valeurs
+    /// répétées dans la query string (liaison de tableau standard ASP.NET Core) —
+    /// ex: ?status=Confirmed&amp;status=Dismissed pour le filtre "Traitées" du
+    /// dashboard. Omis = comportement historique (Pending par défaut).
+    /// ?status=Pending&amp;status=Confirmed&amp;status=Dismissed pour "Toutes".
     /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetAlerts(
-        [FromQuery] AlertStatus? status,
+        [FromQuery] AlertStatus[]? status,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
         CancellationToken cancellationToken = default)
@@ -77,7 +83,7 @@ public sealed class AlertController : ControllerBase
         }
 
         var query = new GetAlertsQuery(
-            statusFilter: status,
+            statusFilter: status is { Length: > 0 } ? status : null,
             operatorCode: operatorCode,
             page: page,
             pageSize: pageSize);
@@ -91,6 +97,7 @@ public sealed class AlertController : ControllerBase
                 a.AlertId,
                 a.TransactionId,
                 a.Operator,
+                Amount = a.Amount.Amount,
                 Decision = a.Score.Decision.ToString(),
                 a.Score.Score,
                 a.Score.FraudType,
@@ -100,8 +107,44 @@ public sealed class AlertController : ControllerBase
                 a.ReviewedBy
             }),
             totalPending = result.TotalPending,
+            totalProcessed = result.TotalProcessed,
             page = result.Page,
             pageSize = result.PageSize
+        });
+    }
+
+    /// <summary>
+    /// Récupère une alerte unique par son AlertId — comble le point ouvert 4
+    /// réclamé par la session frontend : après un conflit 409 sur
+    /// POST /alerts/{alertId}/validate (alerte déjà traitée par un autre
+    /// agent), le dashboard peut relire l'état exact de CETTE alerte sans
+    /// dépendre de la fenêtre de pagination de GET /alerts.
+    ///
+    /// GESTION D'ERREUR : AlertNotFoundException (404), levée par
+    /// GetAlertByIdHandler, interceptée par GlobalExceptionMiddleware —
+    /// pas de try/catch ici, cohérent avec les autres endpoints.
+    /// </summary>
+    [HttpGet("{alertId}")]
+    public async Task<IActionResult> GetAlertById(
+        string alertId,
+        CancellationToken cancellationToken)
+    {
+        var alert = await _mediator.Send(
+            new GetAlertByIdQuery(alertId), cancellationToken);
+
+        return Ok(new
+        {
+            alert.AlertId,
+            alert.TransactionId,
+            alert.Operator,
+            Amount = alert.Amount.Amount,
+            Decision = alert.Score.Decision.ToString(),
+            alert.Score.Score,
+            alert.Score.FraudType,
+            Status = alert.Status.ToString(),
+            alert.CreatedAt,
+            alert.ReviewedAt,
+            alert.ReviewedBy
         });
     }
 

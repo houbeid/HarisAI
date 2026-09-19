@@ -4,6 +4,7 @@ using FraudDetection.Application.Commands.ValidateAlert;
 using FraudDetection.Application.Exceptions;
 using FraudDetection.Application.Interfaces;
 using FraudDetection.Domain.Entities;
+using FraudDetection.Domain.ValueObjects;
 using MediatR;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -43,7 +44,8 @@ public class CreateAlertHandlerTests
             alertId: ApplicationTestFixtures.ValidAlertId,
             transactionId: ApplicationTestFixtures.ValidTransactionId,
             operatorCode: ApplicationTestFixtures.ValidOperatorCode,
-            score: ApplicationTestFixtures.BuildReviewScore());
+            score: ApplicationTestFixtures.BuildReviewScore(),
+            amount: new Money(47000m, "MRU"));
 
         var result = await _handler.Handle(command, CancellationToken.None);
 
@@ -69,7 +71,8 @@ public class CreateAlertHandlerTests
             alertId: ApplicationTestFixtures.ValidAlertId,
             transactionId: ApplicationTestFixtures.ValidTransactionId,
             operatorCode: ApplicationTestFixtures.ValidOperatorCode,
-            score: ApplicationTestFixtures.BuildReviewScore());
+            score: ApplicationTestFixtures.BuildReviewScore(),
+            amount: new Money(47000m, "MRU"));
 
         await _handler.Handle(command, CancellationToken.None);
 
@@ -100,7 +103,8 @@ public class CreateAlertHandlerTests
             alertId: ApplicationTestFixtures.ValidAlertId,
             transactionId: ApplicationTestFixtures.ValidTransactionId,
             operatorCode: ApplicationTestFixtures.ValidOperatorCode,
-            score: ApplicationTestFixtures.BuildReviewScore());
+            score: ApplicationTestFixtures.BuildReviewScore(),
+            amount: new Money(47000m, "MRU"));
 
         var result = await _handler.Handle(command, CancellationToken.None);
 
@@ -127,7 +131,8 @@ public class CreateAlertHandlerTests
             alertId: ApplicationTestFixtures.ValidAlertId,
             transactionId: ApplicationTestFixtures.ValidTransactionId,
             operatorCode: ApplicationTestFixtures.ValidOperatorCode,
-            score: ApplicationTestFixtures.BuildReviewScore());
+            score: ApplicationTestFixtures.BuildReviewScore(),
+            amount: new Money(47000m, "MRU"));
 
         await _handler.Handle(command, CancellationToken.None);
 
@@ -152,7 +157,8 @@ public class CreateAlertHandlerTests
             alertId: ApplicationTestFixtures.ValidAlertId,
             transactionId: ApplicationTestFixtures.ValidTransactionId,
             operatorCode: ApplicationTestFixtures.ValidOperatorCode,
-            score: ApplicationTestFixtures.BuildApproveScore()));
+            score: ApplicationTestFixtures.BuildApproveScore(),
+            amount: new Money(47000m, "MRU")));
     }
 }
 

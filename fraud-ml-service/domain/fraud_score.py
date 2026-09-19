@@ -23,10 +23,41 @@ THRESHOLD_REVIEW = 0.40   # Score >= 40% → REVIEW
                            # Score <  40% → APPROVE
 
 # Poids des modèles dans le score ensemble
-WEIGHT_XGBOOST   = 0.40   # Fraude temps réel — poids principal
-WEIGHT_ISOFOREST = 0.20   # Anomalie non supervisée
-WEIGHT_TFT       = 0.25   # Pattern temporel — AML
-WEIGHT_GNN       = 0.15   # Réseau de comptes — blanchiment
+# Poids des modèles dans le score ensemble
+#
+# ── RÉVISÉ (phase de démarrage — voir addendum 10.8 doc technique) ──
+# XGBoost, TFT et GNN sont supervisés, entraînés sur des données
+# ÉTRANGÈRES (PaySim/Aryan pour XGBoost, IBM AML pour TFT/GNN) — leurs
+# patterns appris peuvent ne pas se transférer au vrai comportement
+# mobile money mauritanien. IsolationForest est non supervisé : il
+# détecte un écart au comportement normal, sans dépendre de patterns
+# de fraude appris sur une donnée étrangère — sa transférabilité est
+# structurellement meilleure pour cette raison.
+#
+# Anciens poids (avant ce correctif) : XGB=0.40, ISO=0.20, TFT=0.25,
+# GNN=0.15 — supposaient une confiance égale dans les 4 modèles quel
+# que soit le contexte de déploiement. Ce n'est plus l'hypothèse
+# retenue pour la phase de démarrage (avant labels mauritaniens
+# confirmés en volume suffisant — voir addendum 10.8).
+#
+# À REVOIR une fois les modèles supervisés ré-entraînés sur des
+# données mauritaniennes réelles confirmées (via Alert.confirm_fraud()
+# — voir addendum 10.5) — à ce moment-là, revenir vers une pondération
+# qui fait davantage confiance aux modèles supervisés redevient
+# justifié. Ce n'est pas fait automatiquement : il faudra revenir
+# modifier ces constantes explicitement.
+WEIGHT_XGBOOST   = 0.33   # Fraude temps réel — réduit de 0.40 (entraîné
+                           # sur PaySim/Aryan, mobile money simulé mais
+                           # pas mauritanien)
+WEIGHT_ISOFOREST = 0.35   # Anomalie non supervisée — augmenté de 0.20,
+                           # devient le poids le PLUS ÉLEVÉ : seul modèle
+                           # dont la logique ne dépend pas d'un pattern de
+                           # fraude appris sur une donnée étrangère
+WEIGHT_TFT       = 0.20   # Pattern temporel — réduit de 0.25 (entraîné
+                           # sur IBM AML, données bancaires internationales)
+WEIGHT_GNN       = 0.12   # Réseau de comptes — réduit de 0.15 (même
+                           # limite que TFT, et le modèle le moins mature
+                           # des 4 — voir run HI-Medium, F1=0.428)
 
 # ── Dépassement à haute confiance (override) ──────────────
 # Sous la seule moyenne pondérée ci-dessus, un modèle à poids faible

@@ -24,6 +24,12 @@ public sealed class AlertRecordConfiguration : IEntityTypeConfiguration<AlertRec
         builder.Property(a => a.Operator)
             .HasMaxLength(50);
 
+        // precision(18,2) — cohérent avec le montant maximal réaliste d'une
+        // transaction mobile money en MRU, deux décimales suffisent (pas de
+        // sous-unité inférieure au centime d'Ouguiya utilisée en pratique).
+        builder.Property(a => a.AmountValue)
+            .HasPrecision(18, 2);
+
         builder.Property(a => a.Decision)
             .HasMaxLength(20);
 

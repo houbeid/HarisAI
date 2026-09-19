@@ -8,6 +8,7 @@ using FraudDetection.Application.Commands.ValidateAlert;
 using FraudDetection.Infrastructure.Auth;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -29,15 +30,20 @@ public sealed class ContractFixesTests
     [Fact]
     public void ValidateAlertRequest_DeserializesStringEnum_WithConverter()
     {
-        // Reproduit exactement la configuration ajoutée dans Program.cs —
-        // si ce test passe, le frontend peut envoyer {"action":"Confirm"}
-        // sans échec de désérialisation.
-        var options = new JsonSerializerOptions();
-        options.Converters.Add(new JsonStringEnumConverter());
+        // Reproduit fidèlement la configuration réelle d'ASP.NET Core, pas un
+        // JsonSerializerOptions() nu — Microsoft.AspNetCore.Mvc.JsonOptions
+        // active déjà PropertyNameCaseInsensitive=true par défaut (permet à
+        // "action" de se lier à la propriété C# "Action"), en plus du
+        // JsonStringEnumConverter ajouté explicitement dans Program.cs.
+        // Un JsonSerializerOptions() nu aurait laissé passer ce test pour
+        // une mauvaise raison — voir le commentaire du test négatif ci-dessous.
+        var aspNetCoreDefaults = new Microsoft.AspNetCore.Mvc.JsonOptions();
+        aspNetCoreDefaults.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
 
         var json = """{"action":"Confirm","note":"test"}""";
 
-        var request = JsonSerializer.Deserialize<ValidateAlertRequest>(json, options);
+        var request = JsonSerializer.Deserialize<ValidateAlertRequest>(
+            json, aspNetCoreDefaults.JsonSerializerOptions);
 
         Assert.NotNull(request);
         Assert.Equal(AlertValidationAction.Confirm, request!.Action);
@@ -47,9 +53,17 @@ public sealed class ContractFixesTests
     [Fact]
     public void ValidateAlertRequest_WithoutConverter_FailsToDeserializeStringEnum()
     {
-        // Preuve négative — sans le convertisseur, la même chaîne JSON échoue.
-        // Documente concrètement le bug qui existait avant le correctif.
-        var optionsWithoutConverter = new JsonSerializerOptions();
+        // Preuve négative isolée sur la VRAIE variable en jeu — le convertisseur
+        // d'enum, pas la casse des propriétés. On garde l'insensibilité à la
+        // casse (comportement ASP.NET Core réel) pour que "action" se lie
+        // bien à la propriété Action ; seul le convertisseur d'enum est retiré.
+        // Sans cet alignement, la liaison de propriété échouerait pour une
+        // raison différente (mauvaise casse) et masquerait le vrai problème
+        // qu'on veut prouver : sans convertisseur, un enum string lève
+        // JsonException, il n'est jamais silencieusement ignoré.
+        var optionsWithoutConverter = new Microsoft.AspNetCore.Mvc.JsonOptions()
+            .JsonSerializerOptions;
+
         var json = """{"action":"Confirm","note":"test"}""";
 
         Assert.Throws<JsonException>(() =>

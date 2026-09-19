@@ -47,4 +47,13 @@ public interface IStrReportRepository
         int page = 1,
         int pageSize = 50,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Compte le nombre total de rapports STR d'un opérateur, sans pagination.
+    /// Utilisé pour exposer un total exploitable côté dashboard (pagination
+    /// réelle plutôt que déduite du nombre d'éléments retournés sur la page
+    /// courante) — absent avant cette version, réclamé par la session frontend.
+    /// </summary>
+    Task<int> CountAsync(
+        string operatorCode, CancellationToken cancellationToken = default);
 }

@@ -31,24 +31,30 @@ export class ApiError extends Error {
 }
 
 export class NetworkError extends Error {
-  constructor(cause: unknown) {
+  constructor(public readonly cause: unknown) {
     super('Impossible de joindre fraud-backend');
     this.name = 'NetworkError';
-    this.cause = cause;
   }
 }
 
 interface RequestOptions {
   method?: 'GET' | 'POST';
   body?: unknown;
-  searchParams?: Record<string, string | number | undefined>;
+  // Une valeur tableau produit PLUSIEURS paires clé=valeur (url.searchParams.append
+  // par élément), pas une valeur unique séparée par virgules — c'est la
+  // liaison de tableau standard attendue par ASP.NET Core côté backend
+  // (?status=Confirmed&status=Dismissed), confirmée dans FRONTEND_STARTER_PACK.md.
+  searchParams?: Record<string, string | number | string[] | undefined>;
 }
 
 function buildUrl(path: string, searchParams?: RequestOptions['searchParams']): string {
   const url = new URL(path, env.apiBaseUrl);
   if (searchParams) {
     for (const [key, value] of Object.entries(searchParams)) {
-      if (value !== undefined) {
+      if (value === undefined) continue;
+      if (Array.isArray(value)) {
+        for (const item of value) url.searchParams.append(key, item);
+      } else {
         url.searchParams.set(key, String(value));
       }
     }

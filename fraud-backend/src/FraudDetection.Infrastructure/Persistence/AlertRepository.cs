@@ -52,15 +52,19 @@ public sealed class AlertRepository : IAlertRepository
     }
 
     public async Task<IReadOnlyList<Alert>> GetByStatusAsync(
-        AlertStatus status,
+        IReadOnlyCollection<AlertStatus>? statuses,
         string? operatorCode = null,
         int page = 1,
         int pageSize = 50,
         CancellationToken cancellationToken = default)
     {
-        var query = _dbContext.Alerts
-            .AsNoTracking()
-            .Where(a => a.Status == status.ToString());
+        var query = _dbContext.Alerts.AsNoTracking();
+
+        if (statuses is { Count: > 0 })
+        {
+            var statusStrings = statuses.Select(s => s.ToString()).ToList();
+            query = query.Where(a => statusStrings.Contains(a.Status));
+        }
 
         if (!string.IsNullOrWhiteSpace(operatorCode))
         {
@@ -74,6 +78,27 @@ public sealed class AlertRepository : IAlertRepository
             .ToListAsync(cancellationToken);
 
         return records.Select(ToDomain).ToList();
+    }
+
+    public async Task<int> CountByStatusesAsync(
+        IReadOnlyCollection<AlertStatus>? statuses,
+        string? operatorCode = null,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbContext.Alerts.AsNoTracking();
+
+        if (statuses is { Count: > 0 })
+        {
+            var statusStrings = statuses.Select(s => s.ToString()).ToList();
+            query = query.Where(a => statusStrings.Contains(a.Status));
+        }
+
+        if (!string.IsNullOrWhiteSpace(operatorCode))
+        {
+            query = query.Where(a => a.Operator == operatorCode);
+        }
+
+        return await query.CountAsync(cancellationToken);
     }
 
     public async Task UpdateAsync(Alert alert, CancellationToken cancellationToken = default)
@@ -119,6 +144,7 @@ public sealed class AlertRepository : IAlertRepository
         AlertId = alert.AlertId,
         TransactionId = alert.TransactionId,
         Operator = alert.Operator,
+        AmountValue = alert.Amount.Amount,
         Score = alert.Score.Score,
         Decision = alert.Score.Decision.ToString(),
         FraudType = alert.Score.FraudType,
@@ -159,6 +185,7 @@ public sealed class AlertRepository : IAlertRepository
             transactionId: record.TransactionId,
             @operator: record.Operator,
             score: score,
+            amount: new Money(record.AmountValue, "MRU"),
             createdAt: record.CreatedAt);
 
         var status = Enum.Parse<AlertStatus>(record.Status);

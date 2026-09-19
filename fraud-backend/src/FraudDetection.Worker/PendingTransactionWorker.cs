@@ -202,7 +202,8 @@ public sealed class PendingTransactionWorker : BackgroundService
                     alertId: score.AlertId,
                     transactionId: transactionId,
                     operatorCode: transaction.Operator,
-                    score: score),
+                    score: score,
+                    amount: transaction.Amount),
                 cancellationToken);
         }
     }

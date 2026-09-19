@@ -323,7 +323,7 @@ public class AlertTests
     [Fact]
     public void Alert_ValidReviewScore_CreatesSuccessfully()
     {
-        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", ReviewScore(), DateTime.UtcNow);
+        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", ReviewScore(), new Money(47000m, "MRU"), DateTime.UtcNow);
         Assert.Equal(AlertStatus.Pending, alert.Status);
         Assert.True(alert.IsPending);
         Assert.False(alert.RequiresStrReport);
@@ -334,13 +334,13 @@ public class AlertTests
     {
         // APPROVE ne génère jamais d'alerte
         Assert.Throws<ArgumentException>(() =>
-            new Alert("ALT-123", "BNK-2024-001", "BANKILY", ApproveScore(), DateTime.UtcNow));
+            new Alert("ALT-123", "BNK-2024-001", "BANKILY", ApproveScore(), new Money(47000m, "MRU"), DateTime.UtcNow));
     }
 
     [Fact]
     public void Alert_Confirm_ChangesStatusAndSetsReviewer()
     {
-        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", BlockScore(), DateTime.UtcNow);
+        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", BlockScore(), new Money(47000m, "MRU"), DateTime.UtcNow);
         alert.Confirm("agent.conformite@bankily.mr", "SIM swap confirmé avec l'opérateur télécom");
 
         Assert.Equal(AlertStatus.Confirmed, alert.Status);
@@ -352,7 +352,7 @@ public class AlertTests
     [Fact]
     public void Alert_Dismiss_ChangesStatusToDismissed()
     {
-        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", ReviewScore(), DateTime.UtcNow);
+        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", ReviewScore(), new Money(47000m, "MRU"), DateTime.UtcNow);
         alert.Dismiss("agent.conformite@bankily.mr", "Faux positif — client habituel déplacé");
 
         Assert.Equal(AlertStatus.Dismissed, alert.Status);
@@ -362,7 +362,7 @@ public class AlertTests
     [Fact]
     public void Alert_ConfirmTwice_Throws()
     {
-        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", ReviewScore(), DateTime.UtcNow);
+        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", ReviewScore(), new Money(47000m, "MRU"), DateTime.UtcNow);
         alert.Confirm("agent1@bankily.mr");
 
         // Un agent ne peut pas modifier une alerte déjà traitée
@@ -372,7 +372,7 @@ public class AlertTests
     [Fact]
     public void Alert_DismissAfterConfirm_Throws()
     {
-        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", ReviewScore(), DateTime.UtcNow);
+        var alert = new Alert("ALT-C15FDD6C8FCB", "BNK-2024-001", "BANKILY", ReviewScore(), new Money(47000m, "MRU"), DateTime.UtcNow);
         alert.Confirm("agent@bankily.mr");
 
         Assert.Throws<InvalidOperationException>(() => alert.Dismiss("agent@bankily.mr"));

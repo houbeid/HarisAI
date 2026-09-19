@@ -21,6 +21,16 @@ public sealed class AlertRecord
 
     public required string Operator { get; set; }
 
+    /// <summary>
+    /// Montant de la transaction ayant déclenché l'alerte — copié depuis
+    /// Transaction.Amount à la création (voir Alert.Amount, Domain).
+    /// Seule la valeur décimale est stockée, pas la devise : Money (Domain)
+    /// n'accepte actuellement que MRU (Ouguiya) comme seule devise valide
+    /// dans tout le projet — ajouter une colonne devise séparée serait
+    /// prématuré tant qu'aucune autre devise n'est réellement supportée.
+    /// </summary>
+    public required decimal AmountValue { get; set; }
+
     // ── Score dénormalisé ────────────────────────────────────────────────────
     public required int Score { get; set; }
     public required string Decision { get; set; }

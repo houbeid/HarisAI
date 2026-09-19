@@ -248,10 +248,12 @@ class TestFraudScore:
 
     def test_override_gnn_seul_confiance_max_pas_noye(self, client_token):
         """
-        Avant le mécanisme de dépassement : GNN seul à 1.0 donnait
-        final_score=0.15 (1.0*WEIGHT_GNN), sous THRESHOLD_REVIEW (0.40)
-        — un GNN certain à 100% d'une fraude n'aurait déclenché aucune
-        revue humaine. C'est le cas concret qui a motivé ce mécanisme.
+        GNN seul à 1.0 donne final_score=1.0*WEIGHT_GNN — largement sous
+        THRESHOLD_REVIEW (0.40), quel que soit le poids exact de GNN
+        (0.15 à l'origine, 0.12 depuis le rééquilibrage phase de
+        démarrage — voir addendum 10.8) — un GNN certain à 100% d'une
+        fraude n'aurait déclenché aucune revue humaine sans le mécanisme
+        d'override. C'est le cas concret qui a motivé ce mécanisme.
         """
         score = self._make_score(client_token, xgb=0.0, iso=0.0, tft=0.0, gnn=1.0)
         assert score.final_score < 0.40  # la moyenne pondérée seule reste basse

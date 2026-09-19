@@ -15,6 +15,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Polly;
 using Polly.Extensions.Http;
+using Prometheus;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -212,7 +213,7 @@ app.MapHealthChecks("/health/ready", new()
     ResponseWriter = WriteHealthCheckJsonResponse
 });
 
-app.MapMetrics(); // /metrics — prometheus-net
+Prometheus.MetricServerMiddlewareExtensions.MapMetrics(app);
 
 app.MapControllers();
 app.MapHub<AlertHub>("/alertHub");

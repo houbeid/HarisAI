@@ -44,19 +44,30 @@ public sealed record GetStrReportsQuery : IRequest<GetStrReportsResult>
     }
 }
 
-/// <summary>Résultat paginé retourné par GetStrReportsHandler.</summary>
+/// <summary>
+/// Résultat paginé retourné par GetStrReportsHandler.
+/// TotalCount est TOUJOURS calculé sur l'ensemble des rapports de
+/// l'opérateur (indépendamment de Page/PageSize) — permet au dashboard
+/// d'afficher une vraie pagination ("12 rapports au total") plutôt que
+/// de déduire un nombre de pages incertain du seul nombre d'éléments
+/// retournés sur la page courante. Absent avant cette version, réclamé
+/// par la session frontend.
+/// </summary>
 public sealed record GetStrReportsResult
 {
     public IReadOnlyList<StrReportData> Reports { get; }
+    public int TotalCount { get; }
     public int Page { get; }
     public int PageSize { get; }
 
     public GetStrReportsResult(
         IReadOnlyList<StrReportData> reports,
+        int totalCount,
         int page,
         int pageSize)
     {
         Reports = reports;
+        TotalCount = totalCount;
         Page = page;
         PageSize = pageSize;
     }
@@ -64,9 +75,9 @@ public sealed record GetStrReportsResult
 
 /// <summary>
 /// Handler de récupération de l'historique des rapports STR.
-/// Délègue entièrement à IStrReportRepository.GetHistoryAsync — pas de
-/// logique métier supplémentaire, cohérent avec le rôle d'une Query
-/// (lecture pure, jamais de mutation).
+/// Délègue à IStrReportRepository.GetHistoryAsync + CountAsync — deux
+/// requêtes en parallèle pour ne pas doubler la latence, cohérent avec
+/// le pattern déjà utilisé dans GetAlertsHandler.
 /// </summary>
 public sealed class GetStrReportsHandler
     : IRequestHandler<GetStrReportsQuery, GetStrReportsResult>
@@ -86,18 +97,28 @@ public sealed class GetStrReportsHandler
         GetStrReportsQuery request,
         CancellationToken cancellationToken)
     {
-        var reports = await _strReportRepository.GetHistoryAsync(
+        var reportsTask = _strReportRepository.GetHistoryAsync(
             operatorCode: request.OperatorCode,
             page: request.Page,
             pageSize: request.PageSize,
             cancellationToken: cancellationToken);
 
+        var totalCountTask = _strReportRepository.CountAsync(
+            operatorCode: request.OperatorCode,
+            cancellationToken: cancellationToken);
+
+        await Task.WhenAll(reportsTask, totalCountTask);
+
+        var reports = await reportsTask;
+        var totalCount = await totalCountTask;
+
         _logger.LogDebug(
-            "GetStrReports — Operator={Operator} Page={Page} Count={Count}",
-            request.OperatorCode, request.Page, reports.Count);
+            "GetStrReports — Operator={Operator} Page={Page} Count={Count} TotalCount={TotalCount}",
+            request.OperatorCode, request.Page, reports.Count, totalCount);
 
         return new GetStrReportsResult(
             reports: reports,
+            totalCount: totalCount,
             page: request.Page,
             pageSize: request.PageSize);
     }

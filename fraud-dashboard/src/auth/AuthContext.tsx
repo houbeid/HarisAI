@@ -43,7 +43,7 @@ interface AuthState {
 interface AuthContextValue extends AuthState {
   isAuthenticated: boolean;
   hasReportsAccess: boolean;
-  loginWithToken: (token: string) => void;
+  loginWithToken: (token: string) => boolean;
   logout: () => void;
 }
 
@@ -79,18 +79,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loginWithToken = useCallback(
-    (token: string) => {
+    (token: string): boolean => {
       const decoded = decodeSafely(token);
       if (!decoded || isExpired(decoded)) {
         // Décision volontaire : un token invalide ou déjà expiré au moment
-        // de la connexion échoue silencieusement vers l'état déconnecté,
-        // plutôt que de lever une exception — la page de login affiche
-        // son propre état d'erreur, ce contexte ne gère pas l'UI d'erreur.
+        // de la connexion échoue silencieusement vers l'état déconnecté ;
+        // c'est à l'appelant (LoginForm) d'afficher l'UI d'erreur en
+        // réagissant à la valeur de retour, pas à ce contexte de le faire.
         logout();
-        return;
+        return false;
       }
       setStoredToken(token);
       setState({ token, agentId: decoded.sub, roles: rolesOf(decoded) });
+      return true;
     },
     [logout],
   );

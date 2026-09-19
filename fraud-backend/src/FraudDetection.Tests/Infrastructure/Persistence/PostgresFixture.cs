@@ -68,6 +68,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         DbContext.PendingTransactions.RemoveRange(DbContext.PendingTransactions);
         DbContext.Alerts.RemoveRange(DbContext.Alerts);
         DbContext.Transactions.RemoveRange(DbContext.Transactions);
+        DbContext.StrReports.RemoveRange(DbContext.StrReports);
         await DbContext.SaveChangesAsync();
 
         // Évite que le tracking EF Core d'un test précédent interfère
